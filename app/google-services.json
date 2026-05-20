@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "970413711316",
+    "project_id": "umnoezdorovie-9c817",
+    "storage_bucket": "umnoezdorovie-9c817.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:970413711316:android:d553c79cf4e6b67a080041",
+        "android_client_info": {
+          "package_name": "com.example.medtest1"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDJmNWROWskoUEhHRCFk0COT5tBqaWwHBo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

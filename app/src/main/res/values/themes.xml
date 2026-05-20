@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Светлая тема окна по умолчанию; светлая/тёмная схема UI задаётся в Compose (Medtest1Theme). -->
+    <!-- Не использовать Theme.DeviceDefault.DayNight.* здесь — на части compileSdk aapt2 не находит родителя. -->
+    <style name="Theme.Medtest1" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

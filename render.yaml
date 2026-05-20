@@ -1,0 +1,22 @@
+# Деплой на https://render.com (бесплатный Web Service).
+# После подключения репозитория URL будет: https://medtest1-backend.onrender.com
+# (имя сервиса можно изменить в Dashboard → Settings → Name)
+
+services:
+  - type: web
+    name: medtest1-backend
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22.12.0
+      - key: DB_FILE
+        value: ./data/data.sqlite
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_KEY
+        generateValue: true
