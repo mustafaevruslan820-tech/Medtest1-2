@@ -30,6 +30,35 @@ export async function verifyFirebaseIdToken(idToken) {
   return admin.auth().verifyIdToken(idToken);
 }
 
+export async function sendAdminEscalationPush({ token, username, body, conversationId }) {
+  if (!admin.apps.length || !token) return false;
+  try {
+    const preview = body || 'Пользователь ждёт ответа';
+    await admin.messaging().send({
+      token,
+      notification: {
+        title: 'Нужен Умник',
+        body: `${username}: ${preview}`.slice(0, 180),
+      },
+      data: {
+        type: 'support_escalation',
+        body: preview,
+        username: username || 'Пользователь',
+        ...(conversationId != null ? { conversationId: String(conversationId) } : {}),
+      },
+      android: {
+        priority: 'high',
+        notification: { channelId: 'support_admin_escalation' },
+      },
+    });
+    return true;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn('[firebase-admin] admin escalation push failed:', e?.message ?? e);
+    return false;
+  }
+}
+
 export async function sendSupportReplyPush({ token, body, messageId }) {
   if (!admin.apps.length || !token) return false;
   try {
@@ -37,7 +66,7 @@ export async function sendSupportReplyPush({ token, body, messageId }) {
     await admin.messaging().send({
       token,
       notification: {
-        title: 'Техподдержка',
+        title: 'Умник ответил',
         body: text,
       },
       data: {

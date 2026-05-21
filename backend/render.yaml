@@ -17,3 +17,6 @@ services:
         generateValue: true
       - key: ADMIN_KEY
         generateValue: true
+      # Задайте вручную в Dashboard (Sync: false), затем Redeploy:
+      # - key: ADMIN_PASSWORD
+      #   sync: false

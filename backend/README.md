@@ -173,4 +173,40 @@ Invoke-WebRequest -Uri $uri -Headers @{ "x-admin-key" = $adminKey } -OutFile "$e
 - `GET /api/admin/support/conversations` (x-admin-key)
 - `GET /api/admin/support/conversations/:id/messages` (x-admin-key)
 - `POST /api/admin/support/conversations/:id/messages` (x-admin-key) — как у пользователя
+
+### Аккаунт Admin (техподдержка)
+
+**Важно:** переменная **`ADMIN_KEY`** на Render — это ключ для панели «Админ поддержки» в приложении (заголовок `x-admin-key`), **не пароль для входа**.
+
+При каждом старте backend создаёт/обновляет пользователя **Admin**:
+
+| Поле | Значение |
+|------|----------|
+| Логин | `Admin` (env `ADMIN_USERNAME`) |
+| Пароль | `Admin123!` по умолчанию или значение **`ADMIN_PASSWORD`** в Render |
+| Email | `admin@medtest1.local` (можно войти и по email) |
+
+После смены `ADMIN_PASSWORD` на Render сделайте **Redeploy** — пароль в базе синхронизируется при старте сервера.
+
+В приложении:
+
+1. Войти: логин **`Admin`**, пароль из **`ADMIN_PASSWORD`** (или `Admin123!`).
+2. Настройки → 7× «Настройки» → вставить **`ADMIN_KEY`** (тот же, что на Render).
+3. Открыть «Админ поддержки».
+
+Push «Нужен Умник» приходит на устройство, где вы вошли под **Admin** (нужны уведомления и интернет для FCM).
+
+### Если Admin не входит после смены ADMIN_PASSWORD
+
+1. **Redeploy** сервиса на Render (чтобы подтянулся код и переменная `ADMIN_PASSWORD`).
+2. Синхронизировать пароль в базе (подставьте свой `ADMIN_KEY` с Render):
+
+```powershell
+$adminKey = "ВАШ_ADMIN_KEY_С_RENDER"
+Invoke-RestMethod -Uri "https://medtest1-backend.onrender.com/api/admin/sync-admin-login" -Method POST -Headers @{ "x-admin-key" = $adminKey }
+```
+
+3. Войти в приложение: логин `Admin`, пароль = значение `ADMIN_PASSWORD` (например `2282301`).
+
+**Release APK** использует `https://medtest1-backend.onrender.com`. **Debug** по умолчанию — локальный IP из `app/build.gradle.kts`; для Admin с Render нужна **release**-сборка или смена `BACKEND_BASE_URL` в debug.
 - `POST /api/admin/support/conversations/:id/upload-image` (x-admin-key)

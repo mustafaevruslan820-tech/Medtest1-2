@@ -79,6 +79,10 @@ function migrate(db) {
   if (!hasUserLastReadAt) {
     db.exec(`ALTER TABLE support_conversations ADD COLUMN user_last_read_at INTEGER NOT NULL DEFAULT 0;`);
   }
+  const hasAdminRequestedAt = supportColumns.some((c) => c.name === 'admin_requested_at');
+  if (!hasAdminRequestedAt) {
+    db.exec(`ALTER TABLE support_conversations ADD COLUMN admin_requested_at INTEGER NOT NULL DEFAULT 0;`);
+  }
 
   const messageColumns = db.prepare(`PRAGMA table_info(support_messages)`).all();
   if (!messageColumns.some((c) => c.name === 'reply_to_message_id')) {

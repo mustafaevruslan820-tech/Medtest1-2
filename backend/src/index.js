@@ -12,6 +12,7 @@ import { openDb } from './db.js';
 import { isMailDeliveryConfigured, sendPasswordResetEmail } from './mail.js';
 import {
   initFirebaseAdmin,
+  sendAdminEscalationPush,
   sendSupportReplyPush,
   verifyFirebaseIdToken,
 } from './firebaseAdmin.js';
@@ -31,6 +32,61 @@ ensureDbParentDir(DB_FILE);
 fs.mkdirSync(path.join(UPLOADS_DIR, 'support'), { recursive: true });
 const db = openDb({ filename: DB_FILE });
 initFirebaseAdmin();
+
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME ?? 'Admin';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? 'admin@medtest1.local';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? 'Admin123!';
+
+function ensureAdminUser() {
+  const hash = bcrypt.hashSync(ADMIN_PASSWORD, 10);
+  const byUsername = db
+    .prepare('SELECT id, username, email FROM users WHERE lower(username) = lower(?) LIMIT 1')
+    .get(ADMIN_USERNAME);
+
+  if (byUsername?.id) {
+    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, byUsername.id);
+    const emailTaken = db
+      .prepare('SELECT id FROM users WHERE lower(email) = lower(?) AND id != ? LIMIT 1')
+      .get(ADMIN_EMAIL, byUsername.id);
+    if (!emailTaken?.id) {
+      db.prepare('UPDATE users SET email = ? WHERE id = ?').run(ADMIN_EMAIL, byUsername.id);
+    }
+    return Number(byUsername.id);
+  }
+
+  const byEmail = db
+    .prepare('SELECT id, username FROM users WHERE lower(email) = lower(?) LIMIT 1')
+    .get(ADMIN_EMAIL);
+  if (byEmail?.id) {
+    db.prepare('UPDATE users SET username = ?, password_hash = ? WHERE id = ?').run(
+      ADMIN_USERNAME,
+      hash,
+      byEmail.id
+    );
+    return Number(byEmail.id);
+  }
+
+  const ts = nowMs();
+  const info = db
+    .prepare(
+      `INSERT INTO users (username, email, password_hash, created_at, last_login_at)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+    .run(ADMIN_USERNAME, ADMIN_EMAIL, hash, ts, ts);
+  return Number(info.lastInsertRowid);
+}
+
+ensureAdminUser();
+
+function isEscalationUserMessage(text) {
+  const t = String(text ?? '').trim();
+  return (
+    t === 'Другое — нужен специалист Умник' ||
+    t === 'Позвать Умника — нужен специалист' ||
+    t.includes('нужен специалист Умник') ||
+    t.includes('Позвать Умника')
+  );
+}
 
 const app = express();
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
@@ -115,13 +171,34 @@ function linkInstallToUser({ installId, userId }) {
   ).run(Number(installId), Number(userId), nowMs());
 }
 
-app.get('/health', (req, res) =>
+app.get('/health', (req, res) => {
+  const adminRow = db
+    .prepare('SELECT id, username, email FROM users WHERE lower(username) = lower(?) LIMIT 1')
+    .get(ADMIN_USERNAME);
   res.json({
     ok: true,
     version: 2,
     features: { supportImages: true, supportReplies: true },
-  })
-);
+    adminLogin: {
+      username: ADMIN_USERNAME,
+      email: ADMIN_EMAIL,
+      exists: Boolean(adminRow?.id),
+      passwordSource: 'ADMIN_PASSWORD env (not ADMIN_KEY)',
+    },
+  });
+});
+
+/** После смены ADMIN_PASSWORD на Render: вызовите с заголовком x-admin-key, затем войдите Admin + новый пароль. */
+app.post('/api/admin/sync-admin-login', requireAdmin, (req, res) => {
+  const id = ensureAdminUser();
+  res.json({
+    ok: true,
+    userId: id,
+    username: ADMIN_USERNAME,
+    email: ADMIN_EMAIL,
+    message: 'Пароль Admin обновлён из ADMIN_PASSWORD. Войдите в приложение этим логином и паролем.',
+  });
+});
 
 app.post('/api/events/install', (req, res) => {
   const { deviceId, appVersion, platform, username } = req.body ?? {};
@@ -182,7 +259,7 @@ app.post('/api/auth/login', (req, res) => {
   const user = db
     .prepare(
       `SELECT id, username, email, password_hash FROM users
-       WHERE username = ? OR lower(email) = lower(?) LIMIT 1`
+       WHERE lower(username) = lower(?) OR lower(email) = lower(?) LIMIT 1`
     )
     .get(id, id);
 
@@ -494,7 +571,7 @@ function mapSupportMessageRow(m, messageById, userLabel) {
     replyPreviewAuthor: replied
       ? replied.sender === 'user'
         ? userLabel
-        : 'Поддержка'
+        : 'Умник'
       : null,
     replyPreviewImageUrl: replied?.image_url ? String(replied.image_url) : null,
   };
@@ -553,6 +630,35 @@ function addSupportMessage({ conversationId, sender, text, replyToMessageId, ima
     .run(Number(conversationId), sender, clean, ts, replyId, imageUrl ?? null);
   db.prepare('UPDATE support_conversations SET updated_at = ? WHERE id = ?').run(ts, Number(conversationId));
   return { ok: true, id: Number(info.lastInsertRowid), createdAt: ts, text: clean, imageUrl: imageUrl ?? null };
+}
+
+function notifyAdminAboutEscalation(conversationId, previewText) {
+  const conv = db
+    .prepare(
+      `SELECT u.username AS username, u.fcm_token AS fcm_token
+       FROM support_conversations c
+       JOIN users u ON u.id = c.user_id
+       WHERE c.id = ?
+       LIMIT 1`
+    )
+    .get(Number(conversationId));
+  const username = conv?.username ? String(conv.username) : 'Пользователь';
+  const preview = previewText?.trim()
+    ? previewText.trim().slice(0, 120)
+    : 'Пользователь просит специалиста';
+
+  const adminRow = db
+    .prepare('SELECT fcm_token FROM users WHERE lower(username) = lower(?) LIMIT 1')
+    .get(ADMIN_USERNAME);
+  const adminToken = adminRow?.fcm_token ?? process.env.ADMIN_FCM_TOKEN ?? '';
+  if (adminToken) {
+    void sendAdminEscalationPush({
+      token: adminToken,
+      username,
+      body: preview,
+      conversationId,
+    });
+  }
 }
 
 function notifyUserAboutAdminReply(conversationId, previewText, messageId) {
@@ -618,6 +724,12 @@ app.post('/api/support/messages', requireAuth, (req, res) => {
   });
   if (!r.ok) return res.status(400).json({ ok: false, error: r.error });
 
+  if (isEscalationUserMessage(r.text)) {
+    const ts = nowMs();
+    db.prepare('UPDATE support_conversations SET admin_requested_at = ? WHERE id = ?').run(ts, convId);
+    notifyAdminAboutEscalation(convId, r.text);
+  }
+
   const full = fetchSupportMessages(convId).find((m) => m.id === r.id) ?? {
     id: r.id,
     conversationId: convId,
@@ -662,6 +774,7 @@ app.get('/api/admin/support/conversations', requireAdmin, (req, res) => {
   const rows = db
     .prepare(
       `SELECT c.id AS conversation_id, c.user_id, c.created_at, c.updated_at,
+              c.admin_requested_at,
               u.username, u.email,
               (
                 SELECT COUNT(1)
@@ -669,10 +782,14 @@ app.get('/api/admin/support/conversations', requireAdmin, (req, res) => {
                 WHERE m.conversation_id = c.id
                   AND m.sender = 'user'
                   AND m.created_at > COALESCE(c.admin_last_read_at, 0)
-              ) AS unread_count
+              ) AS unread_count,
+              CASE
+                WHEN COALESCE(c.admin_requested_at, 0) > COALESCE(c.admin_last_read_at, 0) THEN 1
+                ELSE 0
+              END AS needs_admin_attention
        FROM support_conversations c
        JOIN users u ON u.id = c.user_id
-       ORDER BY unread_count DESC, c.updated_at DESC`
+       ORDER BY needs_admin_attention DESC, unread_count DESC, c.updated_at DESC`
     )
     .all()
     .map((r) => ({
@@ -683,6 +800,8 @@ app.get('/api/admin/support/conversations', requireAdmin, (req, res) => {
       createdAt: Number(r.created_at),
       updatedAt: Number(r.updated_at),
       unreadCount: Number(r.unread_count ?? 0),
+      needsAdminAttention: Number(r.needs_admin_attention ?? 0) === 1,
+      adminRequestedAt: Number(r.admin_requested_at ?? 0),
     }));
   res.json({ ok: true, conversations: rows });
 });
@@ -696,16 +815,17 @@ app.get('/api/admin/support/conversations/:id/messages', requireAdmin, (req, res
 
   const messages = fetchSupportMessages(convId);
 
+  const ts = nowMs();
   const lastUserMessage = messages
     .filter((m) => m.sender === 'user')
     .at(-1);
-  if (lastUserMessage?.createdAt) {
-    db.prepare(
-      `UPDATE support_conversations
-       SET admin_last_read_at = MAX(COALESCE(admin_last_read_at, 0), ?)
-       WHERE id = ?`
-    ).run(Number(lastUserMessage.createdAt), convId);
-  }
+  const readAt = Math.max(ts, Number(lastUserMessage?.createdAt ?? 0));
+  db.prepare(
+    `UPDATE support_conversations
+     SET admin_last_read_at = MAX(COALESCE(admin_last_read_at, 0), ?),
+         admin_requested_at = 0
+     WHERE id = ?`
+  ).run(readAt, convId);
 
   res.json({ ok: true, conversationId: convId, messages });
 });
