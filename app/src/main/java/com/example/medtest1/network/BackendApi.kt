@@ -36,7 +36,9 @@ data class SupportConversation(
     val email: String,
     val createdAt: Long,
     val updatedAt: Long,
-    val unreadCount: Int = 0
+    val unreadCount: Int = 0,
+    val needsAdminAttention: Boolean = false,
+    val adminRequestedAt: Long = 0L
 )
 
 data class BackendPasswordResetResult(
@@ -368,7 +370,9 @@ object BackendApi {
                                     email = o.optString("email"),
                                     createdAt = o.optLong("createdAt"),
                                     updatedAt = o.optLong("updatedAt"),
-                                    unreadCount = o.optInt("unreadCount", 0)
+                                    unreadCount = o.optInt("unreadCount", 0),
+                                    needsAdminAttention = o.optBoolean("needsAdminAttention", false),
+                                    adminRequestedAt = o.optLong("adminRequestedAt", 0L)
                                 )
                             )
                         }

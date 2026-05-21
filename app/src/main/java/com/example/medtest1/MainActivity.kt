@@ -199,10 +199,11 @@ import com.example.medtest1.data.UserProfile
 import com.example.medtest1.data.WellbeingEntry
 import com.example.medtest1.network.BackendApi
 import com.example.medtest1.network.SupportMessage
+import com.example.medtest1.notifications.SupportAdminNotifier
 import com.example.medtest1.notifications.SupportChatNotifier
 import com.example.medtest1.support.SupportAdminScreen
+import com.example.medtest1.support.SupportAgentInfo
 import com.example.medtest1.support.SupportChatScreen
-import com.example.medtest1.support.backendImageBaseUrl
 import com.google.firebase.messaging.FirebaseMessaging
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -247,6 +248,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val databaseHelper = AppDatabaseHelper(this)
         val openSupportChat = intent?.getBooleanExtra(EXTRA_OPEN_SUPPORT_CHAT, false) == true
+        val openSupportAdmin = intent?.getBooleanExtra(EXTRA_OPEN_SUPPORT_ADMIN, false) == true
         enableEdgeToEdge()
         setContent {
             val context = LocalContext.current
@@ -261,6 +263,7 @@ class MainActivity : ComponentActivity() {
                     databaseHelper = databaseHelper,
                     darkTheme = darkTheme,
                     initialOpenSupportChat = openSupportChat,
+                    initialOpenSupportAdmin = openSupportAdmin,
                     onDarkThemeChange = { d ->
                         darkTheme = d
                         themePrefs.edit { putBoolean("pref_dark_theme", d) }
@@ -272,6 +275,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_OPEN_SUPPORT_CHAT = "extra_open_support_chat"
+        const val EXTRA_OPEN_SUPPORT_ADMIN = "extra_open_support_admin"
     }
 }
 
@@ -572,6 +576,7 @@ private fun MedApp(
     databaseHelper: AppDatabaseHelper,
     darkTheme: Boolean,
     initialOpenSupportChat: Boolean = false,
+    initialOpenSupportAdmin: Boolean = false,
     onDarkThemeChange: (Boolean) -> Unit
 ) {
     var currentScreen by remember { mutableStateOf(Screen.Onboarding) }
@@ -588,9 +593,9 @@ private fun MedApp(
     val sessionPrefs = remember(context) {
         context.getSharedPreferences("medtest_session", Context.MODE_PRIVATE)
     }
-    val supportImageBaseUrl = remember { backendImageBaseUrl() }
     var appInForeground by remember { mutableStateOf(false) }
     var pendingOpenSupportChat by remember { mutableStateOf(initialOpenSupportChat) }
+    var pendingOpenSupportAdmin by remember { mutableStateOf(initialOpenSupportAdmin) }
     val activity = context as? Activity
 
     androidx.compose.runtime.DisposableEffect(Unit) {
@@ -612,7 +617,7 @@ private fun MedApp(
     val assistantTourSteps = remember {
         listOf(
             AssistantTourStep(
-                title = "Умник",
+                title = "Бот-Умник",
                 body = "Помощник и этот тур — нажмите снова в любой момент.",
                 spotlight = AssistantTourSpotlight.HomeUmnik,
                 targetScreen = Screen.Home
@@ -791,6 +796,41 @@ private fun MedApp(
         }
     }
 
+    LaunchedEffect(activeUser, pendingOpenSupportAdmin) {
+        if (activeUser.isNotBlank() && pendingOpenSupportAdmin) {
+            currentScreen = Screen.SupportAdmin
+            pendingOpenSupportAdmin = false
+        }
+    }
+
+    LaunchedEffect(activeUser, currentScreen) {
+        if (!activeUser.equals("Admin", ignoreCase = true)) return@LaunchedEffect
+        SupportAdminNotifier.ensureChannel(context)
+        while (true) {
+            val adminKey = sessionPrefs.getString("support_admin_key", "").orEmpty()
+            if (adminKey.isNotBlank() && currentScreen != Screen.SupportAdmin) {
+                val res = runCatching { BackendApi.adminListSupportConversationsDetailed(adminKey) }.getOrNull()
+                val urgent = res?.conversations
+                    ?.filter { it.needsAdminAttention }
+                    ?.maxByOrNull { it.adminRequestedAt }
+                if (urgent != null) {
+                    val lastNotified = sessionPrefs.getLong("admin_last_escalation_at", 0L)
+                    if (urgent.adminRequestedAt > lastNotified) {
+                        SupportAdminNotifier.showEscalation(
+                            context,
+                            urgent.username,
+                            "Пользователь просит специалиста Умник"
+                        )
+                        sessionPrefs.edit {
+                            putLong("admin_last_escalation_at", urgent.adminRequestedAt)
+                        }
+                    }
+                }
+            }
+            delay(3000)
+        }
+    }
+
     LaunchedEffect(activeUser, currentScreen, appInForeground) {
         if (activeUser.isBlank()) return@LaunchedEffect
         SupportChatNotifier.ensureChannel(context)
@@ -801,18 +841,18 @@ private fun MedApp(
                 if (currentScreen == Screen.SupportChat) {
                     markAdminMessagesNotified(sessionPrefs, messages)
                     runCatching { BackendApi.markSupportRead(token) }
-                } else if (appInForeground) {
+                } else {
                     val lastNotified = sessionPrefs.getLong("support_last_notified_admin_id", 0L)
                     val freshAdmin = messages
                         .filter { it.sender == "admin" && it.id > lastNotified }
                         .maxByOrNull { it.id }
                     if (freshAdmin != null) {
-                        val preview = when {
-                            freshAdmin.text.isNotBlank() -> freshAdmin.text
-                            !freshAdmin.imageUrl.isNullOrBlank() -> "Вам отправили фото"
-                            else -> "Вам ответили на сообщение"
-                        }
-                        SupportChatNotifier.showNewAdminReply(context, preview)
+                        val preview = freshAdmin.text.ifBlank { "Вам ответили в поддержке" }
+                        SupportChatNotifier.showNewAdminReply(
+                            context,
+                            preview,
+                            senderName = SupportAgentInfo.HUMAN_NAME
+                        )
                         sessionPrefs.edit { putLong("support_last_notified_admin_id", freshAdmin.id) }
                     }
                 }
@@ -1052,13 +1092,19 @@ private fun MedApp(
                                         }
                                     }
                                 }
+                                val backendHint = BuildConfig.BACKEND_BASE_URL
                                 snackbarHostState.showSnackbar(
-                                    if (auth?.error == "network_error" || auth?.error == "empty_response") {
-                                        "Сервер недоступен. Проверьте backend и адрес в приложении."
-                                    } else if (wrongCreds) {
-                                        "Неверный логин или пароль."
-                                    } else {
-                                        "Не удалось войти. Попробуйте позже."
+                                    when {
+                                        auth?.error == "network_error" || auth?.error == "empty_response" ->
+                                            "Сервер недоступен ($backendHint). Проверьте интернет и что backend запущен."
+                                        wrongCreds && normalized.equals("Admin", ignoreCase = true) ->
+                                            "Admin: пароль = ADMIN_PASSWORD на Render (сейчас не ADMIN_KEY). " +
+                                                "Сборка ходит на $backendHint. После смены пароля — Redeploy backend " +
+                                                "и вызов POST /api/admin/sync-admin-login с x-admin-key."
+                                        wrongCreds ->
+                                            "Неверный логин или пароль (сервер: $backendHint)."
+                                        else ->
+                                            "Не удалось войти. Попробуйте позже."
                                     }
                                 )
                                 return@launch
@@ -1413,7 +1459,8 @@ private fun MedApp(
             Screen.SupportChat -> SupportChatScreen(
                 modifier = Modifier.padding(innerPadding),
                 tokenProvider = { sessionPrefs.getString("auth_token", "").orEmpty() },
-                imageBaseUrl = supportImageBaseUrl,
+                userProfile = prefillProfile,
+                username = activeUser,
                 onMessagesSeen = { markAdminMessagesNotified(sessionPrefs, it) },
                 onBack = { currentScreen = Screen.Settings }
             )
@@ -1649,7 +1696,7 @@ private fun AssistantTourOverlay(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "Умник — справка по приложению",
+                        text = "Бот-Умник — справка по приложению",
                         style = MaterialTheme.typography.titleMedium,
                         color = scheme.onSurface
                     )
