@@ -96,4 +96,82 @@ function migrate(db) {
   if (!userColumns.some((c) => c.name === 'fcm_token')) {
     db.exec(`ALTER TABLE users ADD COLUMN fcm_token TEXT;`);
   }
+  if (!userColumns.some((c) => c.name === 'role')) {
+    db.exec(`ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'patient';`);
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS doctor_profiles (
+      user_id INTEGER PRIMARY KEY,
+      specialty TEXT NOT NULL DEFAULT '',
+      full_name TEXT NOT NULL DEFAULT '',
+      experience_years INTEGER NOT NULL DEFAULT 0,
+      education TEXT NOT NULL DEFAULT '',
+      bio TEXT NOT NULL DEFAULT '',
+      photo_base64 TEXT,
+      updated_at INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS doctor_shifts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      doctor_user_id INTEGER NOT NULL,
+      started_at INTEGER NOT NULL,
+      ended_at INTEGER,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      FOREIGN KEY(doctor_user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_doctor_shifts_active
+      ON doctor_shifts(doctor_user_id, is_active);
+
+    CREATE TABLE IF NOT EXISTS doctor_assignments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      doctor_user_id INTEGER NOT NULL,
+      patient_user_id INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      assigned_at INTEGER NOT NULL,
+      patient_profile_json TEXT,
+      treatment_sync_json TEXT,
+      FOREIGN KEY(doctor_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(patient_user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_doctor_assignments_doctor
+      ON doctor_assignments(doctor_user_id, status);
+
+    CREATE TABLE IF NOT EXISTS doctor_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      assignment_id INTEGER NOT NULL,
+      sender TEXT NOT NULL CHECK(sender IN ('doctor', 'patient')),
+      text TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY(assignment_id) REFERENCES doctor_assignments(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_doctor_messages_assignment
+      ON doctor_messages(assignment_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS doctor_prescriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      assignment_id INTEGER NOT NULL,
+      prescription_text TEXT NOT NULL,
+      treatment_plan_text TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY(assignment_id) REFERENCES doctor_assignments(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS treatment_reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      assignment_id INTEGER NOT NULL,
+      patient_user_id INTEGER NOT NULL,
+      report_data_json TEXT NOT NULL,
+      pdf_base64 TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      doctor_conclusion TEXT,
+      doctor_signed_at INTEGER,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY(assignment_id) REFERENCES doctor_assignments(id) ON DELETE CASCADE
+    );
+  `);
 }

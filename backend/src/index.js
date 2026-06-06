@@ -16,6 +16,7 @@ import {
   sendSupportReplyPush,
   verifyFirebaseIdToken,
 } from './firebaseAdmin.js';
+import { registerDoctorRoutes } from './doctorApi.js';
 
 const PORT = Number.parseInt(process.env.PORT ?? '8080', 10);
 const DB_FILE = process.env.DB_FILE ?? './data.sqlite';
@@ -44,7 +45,7 @@ function ensureAdminUser() {
     .get(ADMIN_USERNAME);
 
   if (byUsername?.id) {
-    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, byUsername.id);
+    db.prepare('UPDATE users SET password_hash = ?, role = ? WHERE id = ?').run(hash, 'admin', byUsername.id);
     const emailTaken = db
       .prepare('SELECT id FROM users WHERE lower(email) = lower(?) AND id != ? LIMIT 1')
       .get(ADMIN_EMAIL, byUsername.id);
@@ -58,9 +59,10 @@ function ensureAdminUser() {
     .prepare('SELECT id, username FROM users WHERE lower(email) = lower(?) LIMIT 1')
     .get(ADMIN_EMAIL);
   if (byEmail?.id) {
-    db.prepare('UPDATE users SET username = ?, password_hash = ? WHERE id = ?').run(
+    db.prepare('UPDATE users SET username = ?, password_hash = ?, role = ? WHERE id = ?').run(
       ADMIN_USERNAME,
       hash,
+      'admin',
       byEmail.id
     );
     return Number(byEmail.id);
@@ -69,8 +71,8 @@ function ensureAdminUser() {
   const ts = nowMs();
   const info = db
     .prepare(
-      `INSERT INTO users (username, email, password_hash, created_at, last_login_at)
-       VALUES (?, ?, ?, ?, ?)`
+      `INSERT INTO users (username, email, password_hash, created_at, last_login_at, role)
+       VALUES (?, ?, ?, ?, ?, 'admin')`
     )
     .run(ADMIN_USERNAME, ADMIN_EMAIL, hash, ts, ts);
   return Number(info.lastInsertRowid);
@@ -130,9 +132,24 @@ function requireAuth(req, res, next) {
   }
 }
 
+function getUserRoleById(userId) {
+  const row = db.prepare('SELECT role FROM users WHERE id = ? LIMIT 1').get(Number(userId));
+  return row?.role ? String(row.role) : 'patient';
+}
+
+function publicUser(user) {
+  return {
+    id: Number(user.id),
+    username: user.username,
+    email: user.email,
+    role: user.role ?? getUserRoleById(user.id),
+  };
+}
+
 function issueToken(user) {
+  const role = user.role ?? getUserRoleById(user.id);
   return jwt.sign(
-    { sub: String(user.id), username: user.username, email: user.email },
+    { sub: String(user.id), username: user.username, email: user.email, role },
     JWT_SECRET,
     { expiresIn: '30d' }
   );
@@ -177,8 +194,8 @@ app.get('/health', (req, res) => {
     .get(ADMIN_USERNAME);
   res.json({
     ok: true,
-    version: 2,
-    features: { supportImages: true, supportReplies: true },
+    version: 3,
+    features: { supportImages: true, supportReplies: true, doctorApi: true },
     adminLogin: {
       username: ADMIN_USERNAME,
       email: ADMIN_EMAIL,
@@ -241,13 +258,13 @@ app.post('/api/auth/register', (req, res) => {
     )
     .run(uname, em, hash, createdAt, createdAt);
 
-  const user = { id: info.lastInsertRowid, username: uname, email: em };
+  const user = { id: info.lastInsertRowid, username: uname, email: em, role: 'patient' };
   const token = issueToken(user);
 
   const install = upsertInstall({ deviceId, appVersion, platform });
   if (install.ok) linkInstallToUser({ installId: install.installId, userId: user.id });
 
-  return res.status(201).json({ ok: true, user, token });
+  return res.status(201).json({ ok: true, user: publicUser(user), token });
 });
 
 app.post('/api/auth/login', (req, res) => {
@@ -258,7 +275,7 @@ app.post('/api/auth/login', (req, res) => {
 
   const user = db
     .prepare(
-      `SELECT id, username, email, password_hash FROM users
+      `SELECT id, username, email, password_hash, role FROM users
        WHERE lower(username) = lower(?) OR lower(email) = lower(?) LIMIT 1`
     )
     .get(id, id);
@@ -274,7 +291,7 @@ app.post('/api/auth/login', (req, res) => {
   const install = upsertInstall({ deviceId, appVersion, platform });
   if (install.ok) linkInstallToUser({ installId: install.installId, userId: user.id });
 
-  return res.json({ ok: true, user: { id: user.id, username: user.username, email: user.email }, token });
+  return res.json({ ok: true, user: publicUser(user), token });
 });
 
 /**
@@ -300,7 +317,7 @@ app.post('/api/auth/sync-password-from-firebase', async (req, res) => {
   if (!email) return res.status(400).json({ ok: false, error: 'no_email_in_token' });
 
   const user = db
-    .prepare('SELECT id, username, email FROM users WHERE lower(email) = lower(?) LIMIT 1')
+    .prepare('SELECT id, username, email, role FROM users WHERE lower(email) = lower(?) LIMIT 1')
     .get(email);
   if (!user) return res.status(404).json({ ok: false, error: 'user_not_found' });
 
@@ -314,7 +331,7 @@ app.post('/api/auth/sync-password-from-firebase', async (req, res) => {
 
   return res.json({
     ok: true,
-    user: { id: user.id, username: user.username, email: user.email },
+    user: publicUser(user),
     token
   });
 });
@@ -881,6 +898,18 @@ app.post('/api/admin/support/conversations/:id/messages', requireAdmin, (req, re
   };
 
   res.status(201).json({ ok: true, conversationId: convId, message: full });
+});
+
+registerDoctorRoutes(app, {
+  db,
+  requireAuth,
+  authFromReq,
+  jwt,
+  JWT_SECRET,
+  ADMIN_KEY,
+  nowMs,
+  normalizeUsername,
+  normalizeEmail,
 });
 
 app.listen(PORT, () => {

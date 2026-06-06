@@ -1,10 +1,7 @@
 import admin from 'firebase-admin';
 import fs from 'node:fs';
 
-/**
- * Инициализация Firebase Admin для проверки idToken (синхронизация пароля после сброса в Firebase).
- * Задайте FIREBASE_SERVICE_ACCOUNT_PATH (путь к JSON) или FIREBASE_SERVICE_ACCOUNT_JSON (строка JSON).
- */
+
 export function initFirebaseAdmin() {
   if (admin.apps.length) return true;
   try {
@@ -55,6 +52,125 @@ export async function sendAdminEscalationPush({ token, username, body, conversat
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn('[firebase-admin] admin escalation push failed:', e?.message ?? e);
+    return false;
+  }
+}
+
+export async function sendDoctorAssignmentPush({ token, patientName, assignmentId }) {
+  if (!admin.apps.length || !token) return false;
+  try {
+    await admin.messaging().send({
+      token,
+      notification: {
+        title: 'Новый пациент',
+        body: `${patientName} выбрал вас для лечения`,
+      },
+      data: {
+        type: 'doctor_assignment',
+        assignmentId: String(assignmentId),
+        patientName: patientName || 'Пациент',
+      },
+      android: { priority: 'high', notification: { channelId: 'doctor_events' } },
+    });
+    return true;
+  } catch (e) {
+    console.warn('[firebase-admin] doctor assignment push failed:', e?.message ?? e);
+    return false;
+  }
+}
+
+export async function sendDoctorMessagePush({ token, senderName, body, assignmentId, messageId }) {
+  if (!admin.apps.length || !token) return false;
+  try {
+    const preview = (body || 'Новое сообщение').slice(0, 120);
+    await admin.messaging().send({
+      token,
+      notification: {
+        title: senderName || 'Сообщение',
+        body: preview,
+      },
+      data: {
+        type: 'doctor_message',
+        assignmentId: String(assignmentId),
+        messageId: messageId != null ? String(messageId) : '',
+        body: preview,
+      },
+      android: { priority: 'high', notification: { channelId: 'doctor_events' } },
+    });
+    return true;
+  } catch (e) {
+    console.warn('[firebase-admin] doctor message push failed:', e?.message ?? e);
+    return false;
+  }
+}
+
+export async function sendPatientPrescriptionPush({ token, assignmentId }) {
+  if (!admin.apps.length || !token) return false;
+  try {
+    await admin.messaging().send({
+      token,
+      notification: {
+        title: 'Рецепт от врача',
+        body: 'Врач выдал рецепт и план лечения',
+      },
+      data: {
+        type: 'doctor_prescription',
+        assignmentId: String(assignmentId),
+      },
+      android: { priority: 'high', notification: { channelId: 'doctor_events' } },
+    });
+    return true;
+  } catch (e) {
+    console.warn('[firebase-admin] prescription push failed:', e?.message ?? e);
+    return false;
+  }
+}
+
+export async function sendDoctorReportPush({ token, patientName, assignmentId, reportId }) {
+  if (!admin.apps.length || !token) return false;
+  try {
+    await admin.messaging().send({
+      token,
+      notification: {
+        title: 'Отчёт по лечению',
+        body: `${patientName} отправил отчёт на заключение`,
+      },
+      data: {
+        type: 'doctor_report',
+        assignmentId: String(assignmentId),
+        reportId: String(reportId),
+      },
+      android: { priority: 'high', notification: { channelId: 'doctor_events' } },
+    });
+    return true;
+  } catch (e) {
+    console.warn('[firebase-admin] doctor report push failed:', e?.message ?? e);
+    return false;
+  }
+}
+
+export async function sendPatientReportConclusionPush({ token, status, assignmentId }) {
+  if (!admin.apps.length || !token) return false;
+  try {
+    const completed = status === 'completed';
+    await admin.messaging().send({
+      token,
+      notification: {
+        title: completed ? 'Лечение завершено' : 'Продолжение лечения',
+        body: completed
+          ? 'Врач подписал завершение лечения'
+          : 'Врач предложил продолжить лечение с новым планом',
+      },
+      data: {
+        type: 'report_conclusion',
+        status: status || 'completed',
+        assignmentId: String(assignmentId),
+      },
+      android: { priority: 'high', notification: { channelId: 'doctor_events' } },
+    });
+    return true;
+  } catch (e) {
+    console.warn('[firebase-admin] report conclusion push failed:', e?.message ?? e);
     return false;
   }
 }
