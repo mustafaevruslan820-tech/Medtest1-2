@@ -1,5 +1,8 @@
 package com.example.medtest1.doctor
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
@@ -15,23 +18,32 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.medtest1.network.BackendApi
 import com.example.medtest1.network.DoctorAssignment
 import com.example.medtest1.network.DoctorPrescription
+import com.example.medtest1.network.DoctorShiftInfo
 import com.example.medtest1.network.TreatmentReportSummary
+import com.example.medtest1.reports.assignmentsToShiftLines
+import com.example.medtest1.reports.exportDoctorShiftToPdf
 import com.example.medtest1.ui.MedSectionLabel
 import com.example.medtest1.ui.MedSubScreenLayout
 import com.example.medtest1.ui.MedSurfaceCard
@@ -78,39 +90,100 @@ private fun groupPatientsByShift(assignments: List<DoctorAssignment>): List<Pati
 fun DoctorPanelScreen(
     modifier: Modifier = Modifier,
     tokenProvider: () -> String,
+    doctorDisplayName: String,
+    patientMilestoneSeenProvider: (Long) -> Int,
+    onPatientMilestoneSeen: (Long, Int) -> Unit,
     onEditProfile: () -> Unit,
     onOpenChat: (assignmentId: Long, patientName: String) -> Unit,
     onBack: () -> Unit
 ) {
     val app = LocalMedAppColors.current
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var onDuty by remember { mutableStateOf(false) }
     var shiftLoading by remember { mutableStateOf(true) }
+    var currentShift by remember { mutableStateOf<DoctorShiftInfo?>(null) }
     var assignments by remember { mutableStateOf<List<DoctorAssignment>>(emptyList()) }
+    var rejections by remember { mutableStateOf<List<DoctorAssignment>>(emptyList()) }
+    var listTab by remember { mutableIntStateOf(0) }
     var selected by remember { mutableStateOf<DoctorAssignment?>(null) }
     var prescriptions by remember { mutableStateOf<List<DoctorPrescription>>(emptyList()) }
     var reports by remember { mutableStateOf<List<TreatmentReportSummary>>(emptyList()) }
-    var rxText by remember { mutableStateOf("") }
-    var planText by remember { mutableStateOf("") }
+    var patientMilestones by remember { mutableStateOf<List<CareMilestone>>(emptyList()) }
+    var milestoneHighlightIndex by remember { mutableIntStateOf(-1) }
+    val assignmentMilestones = remember { mutableStateMapOf<Long, List<CareMilestone>>() }
+    var sendingPrescription by remember { mutableStateOf(false) }
     var conclusion by remember { mutableStateOf("") }
     var continuePlan by remember { mutableStateOf("") }
     var status by remember { mutableStateOf<String?>(null) }
+    var pendingShiftExport by remember { mutableStateOf<DoctorShiftInfo?>(null) }
+
+    val shiftPdfLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/pdf")
+    ) { uri: Uri? ->
+        val shift = pendingShiftExport
+        if (uri == null || shift == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val rxCounts = mutableMapOf<Long, Int>()
+            val repCounts = mutableMapOf<Long, Int>()
+            assignments.forEach { a ->
+                val detail = BackendApi.getAssignmentDetail(tokenProvider(), a.id)
+                rxCounts[a.id] = detail.prescriptions.size
+                repCounts[a.id] = detail.reports.size
+            }
+            val shiftPatients = assignments.filter { it.assignedAt >= shift.startedAt }
+            val ok = exportDoctorShiftToPdf(
+                context = context,
+                uri = uri,
+                doctorName = doctorDisplayName,
+                shiftStartedAt = shift.startedAt,
+                shiftEndedAt = shift.endedAt ?: System.currentTimeMillis(),
+                patients = assignmentsToShiftLines(shiftPatients, rxCounts, repCounts)
+            )
+            status = if (ok) "PDF-отчёт о смене сохранён." else "Не удалось сохранить PDF."
+            pendingShiftExport = null
+        }
+    }
 
     fun refresh() {
         scope.launch {
             val (_, duty) = BackendApi.getMyShift(tokenProvider())
             onDuty = duty
+            currentShift = BackendApi.getMyShiftDetail(tokenProvider())
             shiftLoading = false
             assignments = BackendApi.getDoctorAssignments(tokenProvider())
+            rejections = BackendApi.getDoctorRejections(tokenProvider())
+            assignments.forEach { a ->
+                val detail = BackendApi.getAssignmentDetail(tokenProvider(), a.id)
+                assignmentMilestones[a.id] = computeDoctorViewMilestones(
+                    prescriptions = detail.prescriptions,
+                    reports = detail.reports,
+                    careEvents = detail.careEvents
+                )
+                val latest = latestDoneMilestoneIndex(assignmentMilestones[a.id].orEmpty())
+                val seen = patientMilestoneSeenProvider(a.id)
+                if (latest > seen) {
+                    onPatientMilestoneSeen(a.id, latest)
+                }
+            }
         }
     }
 
     fun loadDetail(assignment: DoctorAssignment) {
         scope.launch {
-            val (a, rx, rep) = BackendApi.getAssignmentDetail(tokenProvider(), assignment.id)
-            selected = a ?: assignment
-            prescriptions = rx
-            reports = rep
+            val detail = BackendApi.getAssignmentDetail(tokenProvider(), assignment.id)
+            selected = detail.assignment ?: assignment
+            prescriptions = detail.prescriptions
+            reports = detail.reports
+            patientMilestones = computeDoctorViewMilestones(
+                detail.prescriptions,
+                detail.reports,
+                detail.careEvents
+            )
+            val latest = latestDoneMilestoneIndex(patientMilestones)
+            val seen = patientMilestoneSeenProvider(assignment.id)
+            milestoneHighlightIndex = if (latest > seen) latest else -1
+            if (latest > seen) onPatientMilestoneSeen(assignment.id, latest)
         }
     }
 
@@ -130,6 +203,15 @@ fun DoctorPanelScreen(
             onBack = { selected = null },
             modifier = modifier
         ) {
+            if (patientMilestones.isNotEmpty()) {
+                MedSurfaceCard {
+                    Text("Прогресс пациента", fontWeight = FontWeight.Bold)
+                    CareMilestoneRow(
+                        milestones = patientMilestones,
+                        highlightNewFromIndex = milestoneHighlightIndex
+                    )
+                }
+            }
             MedSurfaceCard {
                 Text("Профиль пациента", fontWeight = FontWeight.Bold)
                 assignment.patientProfileJson?.let { json ->
@@ -171,45 +253,45 @@ fun DoctorPanelScreen(
                 modifier = Modifier.fillMaxWidth()
             ) { Text("Чат с пациентом") }
 
-            MedSectionLabel("Выдать рецепт и план")
-            MedSurfaceCard {
-                OutlinedTextField(
-                    value = rxText,
-                    onValueChange = { rxText = it },
-                    label = { Text("Рецепт") },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 2
-                )
-                OutlinedTextField(
-                    value = planText,
-                    onValueChange = { planText = it },
-                    label = { Text("План лечения") },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 3
-                )
-                Button(
-                    onClick = {
-                        scope.launch {
-                            val ok = BackendApi.sendPrescription(
-                                tokenProvider(), assignment.id, rxText.trim(), planText.trim()
-                            )
-                            status = if (ok) "Рецепт отправлен пациенту." else "Не удалось отправить."
-                            if (ok) loadDetail(assignment)
+            MedSectionLabel("Назначить лечение")
+            DoctorPrescriptionPlanner(
+                sending = sendingPrescription,
+                onPlanReady = { plan ->
+                    sendingPrescription = true
+                    scope.launch {
+                        val summary = formatPrescriptionSummary(plan)
+                        val json = structuredPlanToJson(plan)
+                        val ok = BackendApi.sendPrescription(
+                            token = tokenProvider(),
+                            assignmentId = assignment.id,
+                            prescriptionText = summary,
+                            treatmentPlanText = json
+                        )
+                        sendingPrescription = false
+                        status = if (ok) {
+                            "План лечения отправлен пациенту на подтверждение."
+                        } else {
+                            "Не удалось отправить план."
                         }
-                    },
-                    enabled = rxText.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("Отправить рецепт") }
-            }
+                        if (ok) loadDetail(assignment)
+                    }
+                }
+            )
 
             if (prescriptions.isNotEmpty()) {
-                MedSectionLabel("Ранее выданные рецепты")
+                MedSectionLabel("Ранее выданные планы")
                 prescriptions.forEach { rx ->
                     MedSurfaceCard {
-                        Text(rx.prescriptionText)
-                        if (rx.treatmentPlanText.isNotBlank()) {
-                            Text("План: ${rx.treatmentPlanText}", style = MaterialTheme.typography.bodySmall)
+                        Text(rx.prescriptionText, fontWeight = FontWeight.SemiBold)
+                        val planPreview = formatStructuredPlanForPatientCard(rx.treatmentPlanText)
+                        if (planPreview.isNotBlank()) {
+                            Text(planPreview, style = MaterialTheme.typography.bodySmall)
                         }
+                        Text(
+                            "Статус: ${prescriptionStatusLabel(rx.patientStatus)}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     }
                 }
             }
@@ -308,7 +390,17 @@ fun DoctorPanelScreen(
                                 scope.launch {
                                     shiftLoading = true
                                     if (onDuty) {
+                                        val shift = currentShift
                                         BackendApi.endShift(tokenProvider())
+                                        if (shift != null) {
+                                            pendingShiftExport = shift.copy(
+                                                endedAt = System.currentTimeMillis(),
+                                                isActive = false
+                                            )
+                                            shiftPdfLauncher.launch(
+                                                "shift_report_${SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())}.pdf"
+                                            )
+                                        }
                                     } else {
                                         BackendApi.startShift(tokenProvider())
                                     }
@@ -326,36 +418,109 @@ fun DoctorPanelScreen(
                         }
                     }
                 }
-                Button(onClick = onEditProfile, modifier = Modifier.fillMaxWidth()) {
-                    Text("Редактировать анкету")
-                }
-            }
-        }
-
-        MedSectionLabel("Мои пациенты")
-        if (assignments.isEmpty()) {
-            Text("Пока нет назначенных пациентов.", modifier = Modifier.padding(8.dp))
-        } else {
-            groupPatientsByShift(assignments).forEach { group ->
-                MedSectionLabel(group.title)
-                group.assignments.forEach { a ->
-                    AnimatedVisibility(
-                        visible = true,
-                        enter = fadeIn(tween(300)) + slideInVertically(tween(300)) { it / 10 }
-                    ) {
-                        MedSurfaceCard(
-                            modifier = Modifier.clickable { loadDetail(a) }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(onClick = onEditProfile, modifier = Modifier.weight(1f)) {
+                        Text("Анкета")
+                    }
+                    if (currentShift != null) {
+                        OutlinedButton(
+                            onClick = {
+                                val shift = currentShift ?: return@OutlinedButton
+                                pendingShiftExport = shift.copy(
+                                    endedAt = System.currentTimeMillis(),
+                                    isActive = onDuty
+                                )
+                                shiftPdfLauncher.launch(
+                                    "shift_report_${SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())}.pdf"
+                                )
+                            },
+                            modifier = Modifier.weight(1f)
                         ) {
-                            Text(a.patientUsername, fontWeight = FontWeight.SemiBold)
-                            Text("Назначен: ${formatTs(a.assignedAt)}", style = MaterialTheme.typography.bodySmall)
-                            Text("Нажмите для просмотра профиля и лечения", style = MaterialTheme.typography.labelSmall)
+                            Text("PDF смены")
                         }
                     }
                 }
             }
         }
+
+        TabRow(selectedTabIndex = listTab) {
+            Tab(
+                selected = listTab == 0,
+                onClick = { listTab = 0 },
+                text = { Text("Пациенты (${assignments.size})") }
+            )
+            Tab(
+                selected = listTab == 1,
+                onClick = { listTab = 1 },
+                text = { Text("Отказы (${rejections.size})") }
+            )
+        }
+
+        if (listTab == 0) {
+            MedSectionLabel("Мои пациенты")
+            if (assignments.isEmpty()) {
+                Text("Пока нет назначенных пациентов.", modifier = Modifier.padding(8.dp))
+            } else {
+                groupPatientsByShift(assignments).forEach { group ->
+                    MedSectionLabel(group.title)
+                    group.assignments.forEach { a ->
+                        val milestones = assignmentMilestones[a.id].orEmpty()
+                        val latest = latestDoneMilestoneIndex(milestones)
+                        val seen = patientMilestoneSeenProvider(a.id)
+                        AnimatedVisibility(
+                            visible = true,
+                            enter = fadeIn(tween(300)) + slideInVertically(tween(300)) { it / 10 }
+                        ) {
+                            MedSurfaceCard(
+                                modifier = Modifier.clickable { loadDetail(a) }
+                            ) {
+                                Text(a.patientUsername, fontWeight = FontWeight.SemiBold)
+                                Text("Назначен: ${formatTs(a.assignedAt)}", style = MaterialTheme.typography.bodySmall)
+                                if (milestones.isNotEmpty()) {
+                                    CareMilestoneRow(
+                                        milestones = milestones,
+                                        highlightNewFromIndex = if (latest > seen) latest else -1,
+                                        modifier = Modifier.padding(top = 6.dp)
+                                    )
+                                }
+                                Text(
+                                    "Нажмите для просмотра профиля и лечения",
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            MedSectionLabel("Пациенты, отказавшиеся от лечения")
+            if (rejections.isEmpty()) {
+                Text("Отказов пока нет.", modifier = Modifier.padding(8.dp))
+            } else {
+                rejections.forEach { r ->
+                    MedSurfaceCard {
+                        Text(r.patientUsername, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Отказ: ${formatTs(r.rejectedAt ?: r.assignedAt)}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            "Причина: ${r.rejectionReason.orEmpty().ifBlank { "Не указана" }}",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+        }
+        status?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
     }
 }
 
 private fun formatTs(ts: Long): String =
     SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(ts))
+
+private fun prescriptionStatusLabel(status: String): String = when (status) {
+    "accepted" -> "Принят пациентом"
+    "declined" -> "Отклонён"
+    else -> "Ожидает ответа"
+}

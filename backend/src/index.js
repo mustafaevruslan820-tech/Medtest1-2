@@ -194,8 +194,14 @@ app.get('/health', (req, res) => {
     .get(ADMIN_USERNAME);
   res.json({
     ok: true,
-    version: 3,
-    features: { supportImages: true, supportReplies: true, doctorApi: true },
+    version: 4,
+    features: {
+      supportImages: true,
+      supportReplies: true,
+      doctorApi: true,
+      prescriptionRespond: true,
+      assignmentReject: true,
+    },
     adminLogin: {
       username: ADMIN_USERNAME,
       email: ADMIN_EMAIL,

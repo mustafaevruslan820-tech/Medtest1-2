@@ -3,7 +3,9 @@ package com.example.medtest1.doctor
 import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,6 +20,7 @@ import androidx.compose.material.icons.filled.LocalHospital
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.WorkHistory
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -29,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -48,6 +52,8 @@ fun DoctorProfileDialog(
 ) {
     val scheme = MaterialTheme.colorScheme
     val app = LocalMedAppColors.current
+    val specialtyLabel = formatDoctorSpecialtyLabel(doctor.specialty).ifBlank { "Врач" }
+    val specialtyStyle = specialtyVisual(doctor.specialty, scheme)
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -60,6 +66,18 @@ fun DoctorProfileDialog(
             colors = CardDefaults.cardColors(containerColor = scheme.surface),
             elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
         ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                app.cardOnHero.copy(alpha = 0.35f),
+                                scheme.surface
+                            )
+                        )
+                    )
+            ) {
             Column(
                 modifier = Modifier
                     .verticalScroll(rememberScrollState())
@@ -77,17 +95,35 @@ fun DoctorProfileDialog(
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
-                        Text(
-                            doctor.specialty.ifBlank { "Врач" },
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = scheme.primary,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = specialtyStyle.container.copy(alpha = 0.65f)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    specialtyStyle.icon,
+                                    contentDescription = null,
+                                    tint = specialtyStyle.accent,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    specialtyLabel,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = app.onHero,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                         if (doctor.onDuty) {
                             Text(
-                                "На смене",
+                                "● На смене",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = scheme.tertiary
+                                color = app.accentRing,
+                                modifier = Modifier.padding(top = 6.dp)
                             )
                         }
                     }
@@ -141,6 +177,7 @@ fun DoctorProfileDialog(
                         ) { Text("Выбрать врача") }
                     }
                 }
+            }
             }
         }
     }

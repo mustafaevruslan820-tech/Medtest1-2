@@ -35,11 +35,27 @@ data class DoctorAssignment(
     val doctorUserId: Long,
     val patientUserId: Long,
     val doctorUsername: String,
+    val doctorSpecialty: String = "",
     val patientUsername: String,
     val status: String,
     val assignedAt: Long,
     val patientProfileJson: String? = null,
-    val treatmentSyncJson: String? = null
+    val treatmentSyncJson: String? = null,
+    val rejectionReason: String? = null,
+    val rejectedAt: Long? = null
+)
+
+data class ApiActionResult(
+    val ok: Boolean,
+    val error: String? = null,
+    val httpCode: Int = -1
+)
+
+data class DoctorShiftInfo(
+    val id: Long,
+    val startedAt: Long,
+    val endedAt: Long? = null,
+    val isActive: Boolean = false
 )
 
 data class DoctorMessage(
@@ -54,7 +70,25 @@ data class DoctorPrescription(
     val id: Long,
     val prescriptionText: String,
     val treatmentPlanText: String,
-    val createdAt: Long
+    val createdAt: Long,
+    val patientStatus: String = "pending",
+    val declineReason: String? = null,
+    val respondedAt: Long? = null
+)
+
+data class CareEvent(
+    val id: Long,
+    val assignmentId: Long,
+    val eventType: String,
+    val createdAt: Long,
+    val metadataJson: String? = null
+)
+
+data class AssignmentDetail(
+    val assignment: DoctorAssignment?,
+    val prescriptions: List<DoctorPrescription>,
+    val reports: List<TreatmentReportSummary>,
+    val careEvents: List<CareEvent>
 )
 
 data class TreatmentReportSummary(
@@ -765,6 +799,19 @@ object BackendApi {
         json.optBoolean("ok", false) to json.optBoolean("onDuty", false)
     }
 
+    suspend fun getMyShiftDetail(token: String): DoctorShiftInfo? = withContext(Dispatchers.IO) {
+        val (code, text) = rawGet("$baseUrl/api/doctors/me/shift", bearerToken = token, adminKey = null)
+        if (code !in 200..299 || text.isNullOrBlank()) return@withContext null
+        val json = runCatching { JSONObject(text) }.getOrNull() ?: return@withContext null
+        val shift = json.optJSONObject("shift") ?: return@withContext null
+        DoctorShiftInfo(
+            id = shift.optLong("id"),
+            startedAt = shift.optLong("startedAt"),
+            endedAt = shift.optLong("endedAt").takeIf { it > 0L },
+            isActive = shift.optBoolean("isActive", false)
+        )
+    }
+
     suspend fun startShift(token: String): Boolean = withContext(Dispatchers.IO) {
         val (code, _) = rawPost("$baseUrl/api/doctors/me/shift/start", JSONObject(), token, null)
         code in 200..299
@@ -795,6 +842,29 @@ object BackendApi {
             )
         }
 
+    suspend fun rejectDoctorAssignment(token: String, reason: String): ApiActionResult =
+        withContext(Dispatchers.IO) {
+            val body = JSONObject().put("reason", reason.trim())
+            val (code, text) = rawPost("$baseUrl/api/patient/assignment/reject", body, token, null)
+            if (code in 200..299) return@withContext ApiActionResult(ok = true, httpCode = code)
+            val err = runCatching { JSONObject(text.orEmpty()).optString("error") }
+                .getOrNull()
+                ?.ifBlank { null }
+            ApiActionResult(ok = false, error = err, httpCode = code)
+        }
+
+    suspend fun getDoctorRejections(token: String): List<DoctorAssignment> = withContext(Dispatchers.IO) {
+        val (code, text) = rawGet("$baseUrl/api/doctors/me/rejections", bearerToken = token, adminKey = null)
+        if (code !in 200..299 || text.isNullOrBlank()) return@withContext emptyList()
+        val arr = runCatching { JSONObject(text).optJSONArray("rejections") }.getOrNull()
+            ?: return@withContext emptyList()
+        buildList {
+            for (i in 0 until arr.length()) {
+                arr.optJSONObject(i)?.let { add(parseAssignment(it)) }
+            }
+        }
+    }
+
     suspend fun getPatientAssignment(token: String): DoctorAssignment? = withContext(Dispatchers.IO) {
         val (code, text) = rawGet("$baseUrl/api/patient/assignment", bearerToken = token, adminKey = null)
         if (code !in 200..299 || text.isNullOrBlank()) return@withContext null
@@ -815,32 +885,24 @@ object BackendApi {
         }
     }
 
-    suspend fun getAssignmentDetail(
-        token: String,
-        assignmentId: Long
-    ): Triple<DoctorAssignment?, List<DoctorPrescription>, List<TreatmentReportSummary>> =
+    suspend fun getAssignmentDetail(token: String, assignmentId: Long): AssignmentDetail =
         withContext(Dispatchers.IO) {
             val (code, text) = rawGet(
                 "$baseUrl/api/assignments/$assignmentId",
                 bearerToken = token,
                 adminKey = null
             )
-            if (code !in 200..299 || text.isNullOrBlank()) return@withContext Triple(null, emptyList(), emptyList())
+            if (code !in 200..299 || text.isNullOrBlank()) {
+                return@withContext AssignmentDetail(null, emptyList(), emptyList(), emptyList())
+            }
             val json = runCatching { JSONObject(text) }.getOrNull()
-                ?: return@withContext Triple(null, emptyList(), emptyList())
+                ?: return@withContext AssignmentDetail(null, emptyList(), emptyList(), emptyList())
             val assignment = json.optJSONObject("assignment")?.let(::parseAssignment)
             val prescriptions = json.optJSONArray("prescriptions")?.let { arr ->
                 buildList {
                     for (i in 0 until arr.length()) {
                         val p = arr.optJSONObject(i) ?: continue
-                        add(
-                            DoctorPrescription(
-                                id = p.optLong("id"),
-                                prescriptionText = p.optString("prescriptionText"),
-                                treatmentPlanText = p.optString("treatmentPlanText"),
-                                createdAt = p.optLong("createdAt")
-                            )
-                        )
+                        add(parsePrescription(p))
                     }
                 }
             } ?: emptyList()
@@ -860,8 +922,54 @@ object BackendApi {
                     }
                 }
             } ?: emptyList()
-            Triple(assignment, prescriptions, reports)
+            val careEvents = json.optJSONArray("careEvents")?.let { arr ->
+                buildList {
+                    for (i in 0 until arr.length()) {
+                        val e = arr.optJSONObject(i) ?: continue
+                        add(parseCareEvent(e))
+                    }
+                }
+            } ?: emptyList()
+            AssignmentDetail(assignment, prescriptions, reports, careEvents)
         }
+
+    suspend fun respondToPrescription(
+        token: String,
+        assignmentId: Long,
+        prescriptionId: Long,
+        action: String,
+        reason: String? = null
+    ): ApiActionResult = withContext(Dispatchers.IO) {
+        val body = JSONObject().put("action", action)
+        if (!reason.isNullOrBlank()) body.put("reason", reason.trim())
+        val (code, text) = rawPost(
+            "$baseUrl/api/assignments/$assignmentId/prescriptions/$prescriptionId/respond",
+            body,
+            token,
+            null
+        )
+        if (code in 200..299) return@withContext ApiActionResult(ok = true, httpCode = code)
+        if (code == 404 && action == "accept") {
+            val fallbackText = "Пациент принял план лечения"
+            if (sendDoctorMessage(token, assignmentId, fallbackText)) {
+                return@withContext ApiActionResult(ok = true, httpCode = code)
+            }
+        }
+        val err = runCatching { JSONObject(text.orEmpty()).optString("error") }
+            .getOrNull()
+            ?.ifBlank { null }
+        ApiActionResult(ok = false, error = err, httpCode = code)
+    }
+
+    suspend fun recordCareEvent(
+        token: String,
+        assignmentId: Long,
+        eventType: String
+    ): Boolean = withContext(Dispatchers.IO) {
+        val body = JSONObject().put("eventType", eventType)
+        val (code, _) = rawPost("$baseUrl/api/assignments/$assignmentId/care-events", body, token, null)
+        code in 200..299
+    }
 
     suspend fun syncPatientTreatment(token: String, assignmentId: Long, treatmentSyncJson: String): Boolean =
         withContext(Dispatchers.IO) {
@@ -973,16 +1081,37 @@ object BackendApi {
         onDuty = o.optBoolean("onDuty", false)
     )
 
+    private fun parsePrescription(p: JSONObject): DoctorPrescription = DoctorPrescription(
+        id = p.optLong("id"),
+        prescriptionText = p.optString("prescriptionText"),
+        treatmentPlanText = p.optString("treatmentPlanText"),
+        createdAt = p.optLong("createdAt"),
+        patientStatus = p.optString("patientStatus", "pending"),
+        declineReason = p.optString("declineReason").ifBlank { null },
+        respondedAt = p.optLong("respondedAt").takeIf { it > 0L }
+    )
+
+    private fun parseCareEvent(e: JSONObject): CareEvent = CareEvent(
+        id = e.optLong("id"),
+        assignmentId = e.optLong("assignmentId"),
+        eventType = e.optString("eventType"),
+        createdAt = e.optLong("createdAt"),
+        metadataJson = e.optString("metadataJson").ifBlank { null }
+    )
+
     private fun parseAssignment(o: JSONObject): DoctorAssignment = DoctorAssignment(
         id = o.optLong("id"),
         doctorUserId = o.optLong("doctorUserId"),
         patientUserId = o.optLong("patientUserId"),
         doctorUsername = o.optString("doctorUsername"),
+        doctorSpecialty = o.optString("doctorSpecialty"),
         patientUsername = o.optString("patientUsername"),
         status = o.optString("status", "active"),
         assignedAt = o.optLong("assignedAt"),
         patientProfileJson = o.optString("patientProfileJson").ifBlank { null },
-        treatmentSyncJson = o.optString("treatmentSyncJson").ifBlank { null }
+        treatmentSyncJson = o.optString("treatmentSyncJson").ifBlank { null },
+        rejectionReason = o.optString("rejectionReason").ifBlank { null },
+        rejectedAt = o.optLong("rejectedAt").takeIf { it > 0L }
     )
 
     private fun rawPut(url: String, body: JSONObject, bearerToken: String): Pair<Int, String?> {

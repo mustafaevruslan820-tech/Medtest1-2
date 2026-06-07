@@ -111,7 +111,7 @@ export async function sendPatientPrescriptionPush({ token, assignmentId }) {
       token,
       notification: {
         title: 'Рецепт от врача',
-        body: 'Врач выдал рецепт и план лечения',
+        body: 'Примите план лечения в разделе «Лечение»',
       },
       data: {
         type: 'doctor_prescription',

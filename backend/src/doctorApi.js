@@ -74,18 +74,63 @@ export function registerDoctorRoutes(app, {
     };
   }
 
+  function mapPrescriptionRow(p) {
+    return {
+      id: Number(p.id),
+      prescriptionText: p.prescription_text,
+      treatmentPlanText: p.treatment_plan_text,
+      createdAt: Number(p.created_at),
+      patientStatus: String(p.patient_status ?? 'pending'),
+      declineReason: p.decline_reason ? String(p.decline_reason) : null,
+      respondedAt: p.responded_at != null ? Number(p.responded_at) : null,
+    };
+  }
+
+  function listCareEvents(assignmentId) {
+    return db
+      .prepare(
+        `SELECT id, assignment_id, event_type, created_at, metadata_json
+         FROM care_events WHERE assignment_id = ? ORDER BY created_at ASC`
+      )
+      .all(assignmentId)
+      .map((e) => ({
+        id: Number(e.id),
+        assignmentId: Number(e.assignment_id),
+        eventType: String(e.event_type),
+        createdAt: Number(e.created_at),
+        metadataJson: e.metadata_json ? String(e.metadata_json) : null,
+      }));
+  }
+
+  function insertCareEvent(assignmentId, eventType, metadata = null) {
+    const ts = nowMs();
+    db.prepare(
+      `INSERT INTO care_events (assignment_id, event_type, created_at, metadata_json)
+       VALUES (?, ?, ?, ?)`
+    ).run(assignmentId, eventType, ts, metadata ? JSON.stringify(metadata) : null);
+    return ts;
+  }
+
   function mapAssignmentRow(r) {
     return {
       id: Number(r.id),
       doctorUserId: Number(r.doctor_user_id),
       patientUserId: Number(r.patient_user_id),
       doctorUsername: r.doctor_username ?? '',
+      doctorSpecialty: r.doctor_specialty ? String(r.doctor_specialty) : '',
       patientUsername: r.patient_username ?? '',
       status: String(r.status ?? 'active'),
       assignedAt: Number(r.assigned_at),
       patientProfileJson: r.patient_profile_json ? String(r.patient_profile_json) : null,
       treatmentSyncJson: r.treatment_sync_json ? String(r.treatment_sync_json) : null,
+      rejectionReason: r.rejection_reason ? String(r.rejection_reason) : null,
+      rejectedAt: r.rejected_at != null ? Number(r.rejected_at) : null,
     };
+  }
+
+  function isPendingPrescriptionStatus(status) {
+    const normalized = String(status ?? 'pending').trim().toLowerCase();
+    return !normalized || normalized === 'pending' || normalized === 'null';
   }
 
   app.post('/api/admin/doctors', requireAdminJwtOrKey, (req, res) => {
@@ -395,14 +440,80 @@ export function registerDoctorRoutes(app, {
     });
   });
 
-  app.get('/api/patient/assignment', requireAuth, (req, res) => {
+  app.post('/api/patient/assignment/reject', requireAuth, (req, res) => {
     const patientId = Number(req.user.sub);
+    const reason = String(req.body?.reason ?? '').trim();
+    if (!reason || reason.length < 3) {
+      return res.status(400).json({ ok: false, error: 'reason_required' });
+    }
+    if (reason.length > 500) {
+      return res.status(400).json({ ok: false, error: 'reason_too_long' });
+    }
+
     const row = db
+      .prepare(
+        `SELECT a.id, a.doctor_user_id, du.fcm_token AS doctor_token, du.username AS doctor_username,
+                pu.username AS patient_username
+         FROM doctor_assignments a
+         JOIN users du ON du.id = a.doctor_user_id
+         JOIN users pu ON pu.id = a.patient_user_id
+         WHERE a.patient_user_id = ? AND a.status = 'active'
+         ORDER BY a.assigned_at DESC LIMIT 1`
+      )
+      .get(patientId);
+    if (!row) return res.status(404).json({ ok: false, error: 'no_assignment' });
+
+    const ts = nowMs();
+    try {
+      db.prepare(
+        `UPDATE doctor_assignments
+         SET status = 'rejected', rejection_reason = ?, rejected_at = ?
+         WHERE id = ?`
+      ).run(reason, ts, row.id);
+    } catch (err) {
+      console.error('assignment_reject_update_failed', err);
+      return res.status(500).json({ ok: false, error: 'db_update_failed' });
+    }
+
+    if (row.doctor_token) {
+      void sendDoctorMessagePush({
+        token: row.doctor_token,
+        senderName: 'Отказ пациента',
+        body: `${row.patient_username ?? 'Пациент'} отказался от лечения: ${reason}`.slice(0, 180),
+        assignmentId: Number(row.id),
+        messageId: ts,
+      });
+    }
+
+    res.json({ ok: true, rejectedAt: ts });
+  });
+
+  app.get('/api/doctors/me/rejections', requireAuth, requireRole('doctor'), (req, res) => {
+    const doctorId = Number(req.user.sub);
+    const rows = db
       .prepare(
         `SELECT a.*, du.username AS doctor_username, pu.username AS patient_username
          FROM doctor_assignments a
          JOIN users du ON du.id = a.doctor_user_id
          JOIN users pu ON pu.id = a.patient_user_id
+         WHERE a.doctor_user_id = ? AND a.status = 'rejected'
+         ORDER BY a.rejected_at DESC, a.assigned_at DESC`
+      )
+      .all(doctorId)
+      .map(mapAssignmentRow);
+    res.json({ ok: true, rejections: rows });
+  });
+
+  app.get('/api/patient/assignment', requireAuth, (req, res) => {
+    const patientId = Number(req.user.sub);
+    const row = db
+      .prepare(
+        `SELECT a.*, du.username AS doctor_username, pu.username AS patient_username,
+                dp.specialty AS doctor_specialty
+         FROM doctor_assignments a
+         JOIN users du ON du.id = a.doctor_user_id
+         JOIN users pu ON pu.id = a.patient_user_id
+         LEFT JOIN doctor_profiles dp ON dp.user_id = a.doctor_user_id
          WHERE a.patient_user_id = ? AND a.status = 'active'
          ORDER BY a.assigned_at DESC LIMIT 1`
       )
@@ -431,10 +542,12 @@ export function registerDoctorRoutes(app, {
     const userId = Number(req.user.sub);
     const row = db
       .prepare(
-        `SELECT a.*, du.username AS doctor_username, pu.username AS patient_username
+        `SELECT a.*, du.username AS doctor_username, pu.username AS patient_username,
+                dp.specialty AS doctor_specialty
          FROM doctor_assignments a
          JOIN users du ON du.id = a.doctor_user_id
          JOIN users pu ON pu.id = a.patient_user_id
+         LEFT JOIN doctor_profiles dp ON dp.user_id = a.doctor_user_id
          WHERE a.id = ? LIMIT 1`
       )
       .get(assignmentId);
@@ -444,16 +557,13 @@ export function registerDoctorRoutes(app, {
     }
     const prescriptions = db
       .prepare(
-        `SELECT id, prescription_text, treatment_plan_text, created_at
+        `SELECT id, prescription_text, treatment_plan_text, created_at,
+                patient_status, decline_reason, responded_at
          FROM doctor_prescriptions WHERE assignment_id = ? ORDER BY created_at ASC`
       )
       .all(assignmentId)
-      .map((p) => ({
-        id: Number(p.id),
-        prescriptionText: p.prescription_text,
-        treatmentPlanText: p.treatment_plan_text,
-        createdAt: Number(p.created_at),
-      }));
+      .map(mapPrescriptionRow);
+    const careEvents = listCareEvents(assignmentId);
     const reports = db
       .prepare(
         `SELECT id, status, doctor_conclusion, doctor_signed_at, created_at
@@ -472,7 +582,129 @@ export function registerDoctorRoutes(app, {
       assignment: mapAssignmentRow(row),
       prescriptions,
       reports,
+      careEvents,
     });
+  });
+
+  app.post('/api/assignments/:assignmentId/prescriptions/:prescriptionId/respond', requireAuth, (req, res) => {
+    const assignmentId = Number(req.params.assignmentId);
+    const prescriptionId = Number(req.params.prescriptionId);
+    const patientId = Number(req.user.sub);
+    const action = String(req.body?.action ?? '').trim();
+    const reason = String(req.body?.reason ?? '').trim();
+
+    if (!['accept', 'decline'].includes(action)) {
+      return res.status(400).json({ ok: false, error: 'invalid_action' });
+    }
+    if (action === 'decline' && reason.length < 3) {
+      return res.status(400).json({ ok: false, error: 'reason_required' });
+    }
+
+    const row = db
+      .prepare(
+        `SELECT p.id, p.patient_status, a.patient_user_id, a.doctor_user_id,
+                du.fcm_token AS doctor_token, du.username AS doctor_username,
+                pu.username AS patient_username
+         FROM doctor_prescriptions p
+         JOIN doctor_assignments a ON a.id = p.assignment_id
+         JOIN users du ON du.id = a.doctor_user_id
+         JOIN users pu ON pu.id = a.patient_user_id
+         WHERE p.id = ? AND p.assignment_id = ? AND a.patient_user_id = ?
+         LIMIT 1`
+      )
+      .get(prescriptionId, assignmentId, patientId);
+    if (!row) return res.status(404).json({ ok: false, error: 'not_found' });
+    if (!isPendingPrescriptionStatus(row.patient_status)) {
+      return res.status(409).json({ ok: false, error: 'already_responded' });
+    }
+
+    const ts = nowMs();
+    const status = action === 'accept' ? 'accepted' : 'declined';
+    try {
+      db.prepare(
+        `UPDATE doctor_prescriptions
+         SET patient_status = ?, decline_reason = ?, responded_at = ?
+         WHERE id = ?`
+      ).run(status, action === 'decline' ? reason : null, ts, prescriptionId);
+    } catch (err) {
+      console.error('prescription_respond_update_failed', err);
+      return res.status(500).json({ ok: false, error: 'db_update_failed' });
+    }
+
+    const eventType = action === 'accept' ? 'prescription_accepted' : 'prescription_declined';
+    try {
+      insertCareEvent(assignmentId, eventType, {
+        prescriptionId,
+        reason: action === 'decline' ? reason : null,
+      });
+    } catch (err) {
+      console.error('care_event_insert_failed', err);
+    }
+
+    if (row.doctor_token) {
+      const body =
+        action === 'accept'
+          ? `${row.patient_username ?? 'Пациент'} принял план лечения`
+          : `${row.patient_username ?? 'Пациент'} отклонил план: ${reason}`.slice(0, 180);
+      void sendDoctorMessagePush({
+        token: row.doctor_token,
+        senderName: row.patient_username ?? 'Пациент',
+        body,
+        assignmentId,
+        messageId: ts,
+      });
+    }
+
+    res.json({ ok: true, status, respondedAt: ts });
+  });
+
+  app.post('/api/assignments/:id/care-events', requireAuth, (req, res) => {
+    const assignmentId = Number(req.params.id);
+    const userId = Number(req.user.sub);
+    const eventType = String(req.body?.eventType ?? '').trim();
+    const allowed = new Set(['first_dose_taken']);
+    if (!allowed.has(eventType)) {
+      return res.status(400).json({ ok: false, error: 'invalid_event' });
+    }
+
+    const row = db
+      .prepare(
+        `SELECT a.patient_user_id, a.doctor_user_id, du.fcm_token AS doctor_token,
+                pu.username AS patient_username
+         FROM doctor_assignments a
+         JOIN users du ON du.id = a.doctor_user_id
+         JOIN users pu ON pu.id = a.patient_user_id
+         WHERE a.id = ? LIMIT 1`
+      )
+      .get(assignmentId);
+    if (!row) return res.status(404).json({ ok: false, error: 'not_found' });
+    if (row.patient_user_id !== userId) {
+      return res.status(403).json({ ok: false, error: 'forbidden' });
+    }
+
+    const existing = db
+      .prepare(
+        `SELECT id FROM care_events
+         WHERE assignment_id = ? AND event_type = ? LIMIT 1`
+      )
+      .get(assignmentId, eventType);
+    if (existing) {
+      return res.json({ ok: true, alreadyRecorded: true });
+    }
+
+    const ts = insertCareEvent(assignmentId, eventType, req.body?.metadata ?? null);
+
+    if (eventType === 'first_dose_taken' && row.doctor_token) {
+      void sendDoctorMessagePush({
+        token: row.doctor_token,
+        senderName: row.patient_username ?? 'Пациент',
+        body: 'Пациент принял первую таблетку',
+        assignmentId,
+        messageId: ts,
+      });
+    }
+
+    res.status(201).json({ ok: true, createdAt: ts, eventType });
   });
 
   app.put('/api/assignments/:id/patient-sync', requireAuth, (req, res) => {
@@ -595,10 +827,13 @@ export function registerDoctorRoutes(app, {
     const ts = nowMs();
     const info = db
       .prepare(
-        `INSERT INTO doctor_prescriptions (assignment_id, prescription_text, treatment_plan_text, created_at)
-         VALUES (?, ?, ?, ?)`
+        `INSERT INTO doctor_prescriptions
+          (assignment_id, prescription_text, treatment_plan_text, created_at, patient_status)
+         VALUES (?, ?, ?, ?, 'pending')`
       )
       .run(assignmentId, rx, plan, ts);
+    const prescriptionId = Number(info.lastInsertRowid);
+    insertCareEvent(assignmentId, 'prescription_sent', { prescriptionId });
 
     const msgText = plan
       ? `Рецепт:\n${rx}\n\nПлан лечения:\n${plan}`
@@ -617,10 +852,11 @@ export function registerDoctorRoutes(app, {
     res.status(201).json({
       ok: true,
       prescription: {
-        id: Number(info.lastInsertRowid),
+        id: prescriptionId,
         prescriptionText: rx,
         treatmentPlanText: plan,
         createdAt: ts,
+        patientStatus: 'pending',
       },
     });
   });
@@ -704,13 +940,22 @@ export function registerDoctorRoutes(app, {
       db.prepare(`UPDATE doctor_assignments SET status = 'continued' WHERE id = ?`).run(assignmentId);
       const planText = String(newTreatmentPlanText ?? '').trim();
       if (planText) {
-        db.prepare(
-          `INSERT INTO doctor_prescriptions (assignment_id, prescription_text, treatment_plan_text, created_at)
-           VALUES (?, ?, ?, ?)`
+        const rxInfo = db.prepare(
+          `INSERT INTO doctor_prescriptions
+            (assignment_id, prescription_text, treatment_plan_text, created_at, patient_status)
+           VALUES (?, ?, ?, ?, 'pending')`
         ).run(assignmentId, 'Продолжение лечения', planText, ts);
+        const newRxId = Number(rxInfo.lastInsertRowid);
+        insertCareEvent(assignmentId, 'prescription_sent', { prescriptionId: newRxId });
         db.prepare(
           `INSERT INTO doctor_messages (assignment_id, sender, text, created_at) VALUES (?, 'doctor', ?, ?)`
         ).run(assignmentId, `Новый план лечения:\n${planText}`, ts);
+        if (row.patient_token) {
+          void sendPatientPrescriptionPush({
+            token: row.patient_token,
+            assignmentId,
+          });
+        }
       }
     }
 

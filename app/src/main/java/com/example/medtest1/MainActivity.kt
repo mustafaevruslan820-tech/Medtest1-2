@@ -221,6 +221,8 @@ import com.example.medtest1.data.UserProfile
 import com.example.medtest1.data.WellbeingEntry
 import com.example.medtest1.network.BackendApi
 import com.example.medtest1.network.SupportMessage
+import com.example.medtest1.doctor.DoctorSession
+import com.example.medtest1.notifications.DoctorNotifier
 import com.example.medtest1.notifications.SupportChatNotifier
 import com.example.medtest1.support.SupportAdminScreen
 import com.example.medtest1.support.SupportChatScreen
@@ -831,7 +833,7 @@ private fun MedApp(
                     }
                     val hadCompleteProfile = sessionPrefs.getBoolean("doctor_profile_complete", false)
                     currentScreen = when {
-                        profile.isProfileReady() -> {
+                        profile?.isProfileReady() == true -> {
                             sessionPrefs.edit { putBoolean("doctor_profile_complete", true) }
                             Screen.DoctorPanel
                         }
@@ -928,6 +930,141 @@ private fun MedApp(
         while (activeUser.isNotBlank()) {
             delay(120_000)
             registerSupportFcmToken(sessionPrefs)
+        }
+    }
+
+    LaunchedEffect(activeUser, userRole, patientAssignment?.id, currentScreen) {
+        if (activeUser.isBlank()) return@LaunchedEffect
+        DoctorNotifier.ensureChannel(context)
+        while (activeUser.isNotBlank()) {
+            val token = sessionPrefs.getString("auth_token", "").orEmpty()
+            if (token.isNotBlank()) {
+                when (userRole) {
+                    "patient" -> {
+                        val assignmentId = patientAssignment?.id ?: 0L
+                        if (assignmentId > 0L) {
+                            val inChat = currentScreen == Screen.DoctorPatientChat && DoctorSession.isInDoctorChat
+                            val detail = runCatching {
+                                BackendApi.getAssignmentDetail(token, assignmentId)
+                            }.getOrDefault(
+                                com.example.medtest1.network.AssignmentDetail(
+                                    null, emptyList(), emptyList(), emptyList()
+                                )
+                            )
+                            val prescriptions = detail.prescriptions
+                            val reports = detail.reports
+                            val newestRx = prescriptions.maxOfOrNull { it.createdAt } ?: 0L
+                            val lastRx = sessionPrefs.getLong("care_last_rx_$assignmentId", 0L)
+                            if (!inChat && newestRx > lastRx) {
+                                DoctorNotifier.show(
+                                    context,
+                                    "Рецепт от врача",
+                                    "Врач выдал рецепт и план лечения",
+                                    assignmentId = assignmentId
+                                )
+                                sessionPrefs.edit { putLong("care_last_rx_$assignmentId", newestRx) }
+                            }
+                            val concluded = reports.filter { it.doctorSignedAt != null }
+                                .maxByOrNull { it.doctorSignedAt ?: 0L }
+                            val lastConclusion = sessionPrefs.getLong("care_last_conclusion_$assignmentId", 0L)
+                            val signedAt = concluded?.doctorSignedAt ?: 0L
+                            if (!inChat && signedAt > lastConclusion) {
+                                val title = if (concluded?.status == "completed") {
+                                    "Лечение завершено"
+                                } else {
+                                    "Продолжение лечения"
+                                }
+                                DoctorNotifier.show(
+                                    context,
+                                    title,
+                                    concluded?.doctorConclusion ?: "Врач оставил заключение",
+                                    assignmentId = assignmentId
+                                )
+                                sessionPrefs.edit { putLong("care_last_conclusion_$assignmentId", signedAt) }
+                            }
+                            val messages = runCatching {
+                                BackendApi.getDoctorMessages(token, assignmentId)
+                            }.getOrDefault(emptyList())
+                            val lastDoctorMsg = messages.filter { it.sender == "doctor" }
+                                .maxByOrNull { it.id }
+                            val lastNotifiedMsg = sessionPrefs.getLong("care_last_doctor_msg_$assignmentId", 0L)
+                            if (!inChat && lastDoctorMsg != null && lastDoctorMsg.id > lastNotifiedMsg &&
+                                !lastDoctorMsg.text.startsWith("Рецепт:")
+                            ) {
+                                DoctorNotifier.show(
+                                    context,
+                                    "Сообщение от врача",
+                                    lastDoctorMsg.text.take(120),
+                                    assignmentId = assignmentId
+                                )
+                                sessionPrefs.edit { putLong("care_last_doctor_msg_$assignmentId", lastDoctorMsg.id) }
+                            }
+                        }
+                    }
+                    "doctor" -> {
+                        val inChat = currentScreen == Screen.DoctorPatientChat && DoctorSession.isInDoctorChat
+                        val inPanel = currentScreen == Screen.DoctorPanel
+                        val assignments = runCatching {
+                            BackendApi.getDoctorAssignments(token)
+                        }.getOrDefault(emptyList())
+                        val newestAssignment = assignments.maxByOrNull { it.assignedAt }
+                        val lastAssignmentAt = sessionPrefs.getLong("care_last_assignment_at", 0L)
+                        if (!inPanel && newestAssignment != null && newestAssignment.assignedAt > lastAssignmentAt) {
+                            DoctorNotifier.show(
+                                context,
+                                "Новый пациент",
+                                "${newestAssignment.patientUsername} выбрал вас",
+                                assignmentId = newestAssignment.id,
+                                openDoctorPanel = true
+                            )
+                            sessionPrefs.edit { putLong("care_last_assignment_at", newestAssignment.assignedAt) }
+                        }
+                        assignments.forEach { assignment ->
+                            val detail = runCatching {
+                                BackendApi.getAssignmentDetail(token, assignment.id)
+                            }.getOrDefault(
+                                com.example.medtest1.network.AssignmentDetail(
+                                    null, emptyList(), emptyList(), emptyList()
+                                )
+                            )
+                            val reports = detail.reports
+                            val pending = reports.firstOrNull { it.status == "pending" }
+                            val lastReport = sessionPrefs.getLong("care_last_report_${assignment.id}", 0L)
+                            if (!inPanel && pending != null && pending.createdAt > lastReport) {
+                                DoctorNotifier.show(
+                                    context,
+                                    "Отчёт по лечению",
+                                    "${assignment.patientUsername} отправил отчёт",
+                                    assignmentId = assignment.id,
+                                    openDoctorPanel = true
+                                )
+                                sessionPrefs.edit { putLong("care_last_report_${assignment.id}", pending.createdAt) }
+                            }
+                            if (!inChat || DoctorSession.activeAssignmentId != assignment.id) {
+                                val messages = runCatching {
+                                    BackendApi.getDoctorMessages(token, assignment.id)
+                                }.getOrDefault(emptyList())
+                                val lastPatientMsg = messages.filter { it.sender == "patient" }
+                                    .maxByOrNull { it.id }
+                                val lastNotified = sessionPrefs.getLong("care_last_patient_msg_${assignment.id}", 0L)
+                                if (lastPatientMsg != null && lastPatientMsg.id > lastNotified) {
+                                    DoctorNotifier.show(
+                                        context,
+                                        assignment.patientUsername,
+                                        lastPatientMsg.text.take(120),
+                                        assignmentId = assignment.id,
+                                        openDoctorPanel = true
+                                    )
+                                    sessionPrefs.edit {
+                                        putLong("care_last_patient_msg_${assignment.id}", lastPatientMsg.id)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            delay(2500)
         }
     }
 
@@ -1030,7 +1167,7 @@ private fun MedApp(
                     }
                     val hadCompleteProfile = sessionPrefs.getBoolean("doctor_profile_complete", false)
                     when {
-                        profile.isProfileReady() -> {
+                        profile?.isProfileReady() == true -> {
                             sessionPrefs.edit { putBoolean("doctor_profile_complete", true) }
                             Screen.DoctorPanel
                         }
@@ -1646,6 +1783,13 @@ private fun MedApp(
             Screen.DoctorPanel -> DoctorPanelScreen(
                 modifier = Modifier.padding(innerPadding),
                 tokenProvider = { sessionPrefs.getString("auth_token", "").orEmpty() },
+                doctorDisplayName = activeUser,
+                patientMilestoneSeenProvider = { assignmentId ->
+                    sessionPrefs.getInt("doctor_milestone_seen_$assignmentId", -1)
+                },
+                onPatientMilestoneSeen = { assignmentId, index ->
+                    sessionPrefs.edit { putInt("doctor_milestone_seen_$assignmentId", index) }
+                },
                 onEditProfile = { currentScreen = Screen.DoctorProfileForm },
                 onOpenChat = { assignmentId, patientName ->
                     doctorChatAssignmentId = assignmentId
@@ -1676,7 +1820,7 @@ private fun MedApp(
             )
 
             Screen.DoctorPatientChat -> DoctorPatientChatScreen(
-                modifier = Modifier.padding(innerPadding),
+                modifier = Modifier.fillMaxSize(),
                 tokenProvider = { sessionPrefs.getString("auth_token", "").orEmpty() },
                 assignmentId = doctorChatAssignmentId,
                 title = doctorChatTitle,
@@ -1693,7 +1837,40 @@ private fun MedApp(
                 plans = treatmentPlans,
                 wellbeingEntries = wellbeingEntries,
                 tokenProvider = { sessionPrefs.getString("auth_token", "").orEmpty() },
+                patientMilestoneSeenIndex = patientAssignment?.id?.let { id ->
+                    sessionPrefs.getInt("patient_milestone_seen_$id", -1)
+                } ?: -1,
+                onPatientMilestoneSeen = { index ->
+                    patientAssignment?.id?.let { id ->
+                        sessionPrefs.edit { putInt("patient_milestone_seen_$id", index) }
+                    }
+                },
                 onAssignmentChanged = { patientAssignment = it },
+                onAutoPlansCreated = { autoPlans ->
+                    var saved = 0
+                    autoPlans.forEach { plan ->
+                        val insertedId = databaseHelper.addTreatmentPlan(plan)
+                        if (insertedId != -1L) {
+                            treatmentPlans.add(0, plan.copy(id = insertedId))
+                            scheduleTreatmentReminder(
+                                context = context,
+                                alarmManager = alarmManager,
+                                plan = plan,
+                                profile = prefillProfile
+                            )
+                            saved++
+                        }
+                    }
+                    scope.launch {
+                        snackbarHostState.showSnackbar(
+                            if (saved > 0) {
+                                "Автоплан создан: $saved приёмов в расписании."
+                            } else {
+                                "Не удалось сохранить автоплан."
+                            }
+                        )
+                    }
+                },
                 onOpenDoctorChat = { assignmentId, doctorName ->
                     doctorChatAssignmentId = assignmentId
                     doctorChatTitle = doctorName
@@ -6016,7 +6193,10 @@ private fun TreatmentScreen(
     plans: List<TreatmentPlan>,
     wellbeingEntries: Map<String, WellbeingEntry>,
     tokenProvider: () -> String,
+    patientMilestoneSeenIndex: Int,
+    onPatientMilestoneSeen: (Int) -> Unit,
     onAssignmentChanged: (DoctorAssignment?) -> Unit,
+    onAutoPlansCreated: (List<TreatmentPlan>) -> Unit,
     onOpenDoctorChat: (assignmentId: Long, doctorName: String) -> Unit,
     assistantTourActive: Boolean,
     assistantSpotlight: AssistantTourSpotlight,
@@ -6128,12 +6308,16 @@ private fun TreatmentScreen(
             }
         }
         DoctorTreatmentSection(
+            username = username,
             tokenProvider = tokenProvider,
             userProfile = profile,
             treatmentPlans = plans,
             wellbeingEntries = wellbeingEntries,
+            patientMilestoneSeenIndex = patientMilestoneSeenIndex,
+            onPatientMilestoneSeen = onPatientMilestoneSeen,
             onOpenChat = onOpenDoctorChat,
-            onAssignmentChanged = onAssignmentChanged
+            onAssignmentChanged = onAssignmentChanged,
+            onAutoPlansCreated = onAutoPlansCreated
         )
         Card(
             modifier = Modifier

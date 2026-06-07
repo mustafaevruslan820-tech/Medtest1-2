@@ -1,0 +1,148 @@
+@startuml use-case-umnoe-zdorovie
+' Диаграмма прецедентов — ИС «Умное Здоровье»
+' Рендер: https://www.plantuml.com/plantuml/uml/  или расширение PlantUML в VS Code / Android Studio
+
+skinparam shadowing false
+skinparam handwritten false
+skinparam defaultFontName Arial
+skinparam usecase {
+  BackgroundColor #E8FFFC
+  BorderColor #0F766E
+  FontSize 11
+}
+skinparam actor {
+  BackgroundColor #FFFFFF
+  BorderColor #0F766E
+}
+skinparam rectangle {
+  BorderColor #134E4A
+  FontColor #134E4A
+}
+
+left to right direction
+
+actor "Пациент" as Patient
+actor "Бот-Умник" as Bot
+actor "Администратор\nподдержки" as Admin
+
+rectangle "Информационная система «Умное Здоровье»" as System {
+
+  package "Аутентификация" {
+    usecase "Пройти приветствие\n(Onboarding)" as UC_Onboard
+    usecase "Зарегистрироваться" as UC_Register
+    usecase "Войти в систему" as UC_Login
+    usecase "Восстановить пароль" as UC_ResetPwd
+    usecase "Выйти из аккаунта" as UC_Logout
+    usecase "Удалить учётную запись" as UC_DeleteAcc
+    usecase "Проверить учётные\nданные на сервере" as UC_AuthServer
+  }
+
+  package "Профиль" {
+    usecase "Заполнить профиль" as UC_ProfileFill
+    usecase "Редактировать\nмедицинский паспорт" as UC_ProfileEdit
+    usecase "Просмотреть SOS" as UC_SOS
+  }
+
+  package "Лечение" {
+    usecase "Создать курс лечения" as UC_TreatCreate
+    usecase "Заполнить приёмы\nпо дням" as UC_TreatDays
+    usecase "Остановить лечение" as UC_TreatStop
+    usecase "Просмотреть архив\nкурсов" as UC_TreatArchive
+    usecase "Сохранить в локальную БД" as UC_SaveLocal
+    usecase "Запланировать\nнапоминание" as UC_Alarm
+    usecase "Получить напоминание\nо приёме" as UC_Reminder
+  }
+
+  package "Дневник" {
+    usecase "Записать\nсамочувствие" as UC_Diary
+    usecase "Просмотреть записи\nдневника" as UC_DiaryView
+  }
+
+  package "Справочник и сканер" {
+    usecase "Найти препарат\nв справочнике" as UC_Catalog
+    usecase "Сохранить в кабинет" as UC_SaveMed
+    usecase "Сканировать штрихкод" as UC_Scan
+    usecase "Управлять\nотсканированными" as UC_ScanManage
+  }
+
+  package "Отчёты" {
+    usecase "Сформировать\nPDF-отчёт" as UC_Pdf
+    usecase "Сохранить PDF\nна устройстве" as UC_PdfSave
+    usecase "Прочитать данные\nиз локальной БД" as UC_ReadLocal
+  }
+
+  package "Техподдержка" {
+    usecase "Открыть чат\nподдержки" as UC_Chat
+    usecase "Отправить сообщение" as UC_SendMsg
+    usecase "Прикрепить изображение" as UC_AttachImg
+    usecase "Быстрый ответ\n(чип)" as UC_QuickReply
+    usecase "Ответ бота" as UC_BotReply
+    usecase "Эскалация\nк специалисту" as UC_Escalate
+    usecase "Ответить\nпользователю" as UC_AdminReply
+    usecase "Просмотреть\nдиалоги" as UC_AdminList
+    usecase "Передать на сервер" as UC_ToServer
+  }
+
+  package "Обучение и настройки" {
+    usecase "Пройти тур\nс Умником" as UC_Tour
+    usecase "Настроить тему\nи уведомления" as UC_Settings
+    usecase "Режим\nадминистратора" as UC_AdminMode
+  }
+}
+
+' --- Пациент ---
+Patient --> UC_Onboard
+Patient --> UC_Register
+Patient --> UC_Login
+Patient --> UC_ResetPwd
+Patient --> UC_Logout
+Patient --> UC_DeleteAcc
+Patient --> UC_ProfileFill
+Patient --> UC_ProfileEdit
+Patient --> UC_SOS
+Patient --> UC_TreatCreate
+Patient --> UC_TreatDays
+Patient --> UC_TreatStop
+Patient --> UC_TreatArchive
+Patient --> UC_Reminder
+Patient --> UC_Diary
+Patient --> UC_DiaryView
+Patient --> UC_Catalog
+Patient --> UC_SaveMed
+Patient --> UC_Scan
+Patient --> UC_ScanManage
+Patient --> UC_Pdf
+Patient --> UC_Chat
+Patient --> UC_SendMsg
+Patient --> UC_AttachImg
+Patient --> UC_QuickReply
+Patient --> UC_Tour
+Patient --> UC_Settings
+Patient --> UC_AdminMode
+
+' --- Бот-Умник ---
+Bot --> UC_BotReply
+Bot --> UC_QuickReply
+
+' --- Администратор ---
+Admin --> UC_AdminList
+Admin --> UC_AdminReply
+
+' --- Include ---
+UC_Login ..> UC_AuthServer : <<include>>
+UC_Register ..> UC_AuthServer : <<include>>
+UC_TreatCreate ..> UC_SaveLocal : <<include>>
+UC_TreatDays ..> UC_SaveLocal : <<include>>
+UC_TreatCreate ..> UC_Alarm : <<include>>
+UC_Diary ..> UC_SaveLocal : <<include>>
+UC_Pdf ..> UC_ReadLocal : <<include>>
+UC_Pdf ..> UC_PdfSave : <<include>>
+UC_SendMsg ..> UC_ToServer : <<include>>
+UC_AttachImg ..> UC_ToServer : <<include>>
+UC_AdminReply ..> UC_ToServer : <<include>>
+
+' --- Extend ---
+UC_Escalate ..> UC_Chat : <<extend>>
+UC_BotReply ..> UC_Chat : <<extend>>
+
+@enduml

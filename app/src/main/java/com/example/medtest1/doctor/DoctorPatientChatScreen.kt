@@ -1,6 +1,7 @@
 package com.example.medtest1.doctor
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -16,6 +18,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Medication
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -38,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.example.medtest1.network.BackendApi
 import com.example.medtest1.network.DoctorMessage
@@ -103,15 +108,35 @@ fun DoctorPatientChatScreen(
                     titleContentColor = app.onHero
                 )
             )
-        },
-        bottomBar = {
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(SupportChatGradient)
+                .padding(innerPadding)
+                .padding(horizontal = 12.dp)
+                .navigationBarsPadding()
+                .imePadding()
+        ) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(messages, key = { it.id }) { msg ->
+                    DoctorChatMessageBubble(
+                        message = msg,
+                        viewerIsDoctor = viewerIsDoctor
+                    )
+                }
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SupportChatGradient)
-                    .navigationBarsPadding()
-                    .imePadding()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -146,42 +171,79 @@ fun DoctorPatientChatScreen(
                 }
             }
         }
-    ) { padding ->
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .fillMaxSize()
-                .background(SupportChatGradient)
-                .padding(padding)
-                .padding(horizontal = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(messages, key = { it.id }) { msg ->
-                val isMine = if (viewerIsDoctor) msg.sender == "doctor" else msg.sender == "patient"
-                val bubbleColor = if (isMine) SupportOutgoingBubble else SupportIncomingBubble
-                val align = if (isMine) Alignment.End else Alignment.Start
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = align
-                ) {
-                    Surface(
-                        color = bubbleColor,
-                        shape = RoundedCornerShape(16.dp)
-                    ) {
-                        Text(
-                            text = msg.text,
-                            color = SupportChatText,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                        )
-                    }
-                    Text(
-                        text = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(msg.createdAt)),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF94A3B8),
-                        modifier = Modifier.padding(top = 2.dp, start = 4.dp, end = 4.dp)
-                    )
-                }
+    }
+}
+
+@Composable
+private fun DoctorChatMessageBubble(
+    message: DoctorMessage,
+    viewerIsDoctor: Boolean
+) {
+    val isMine = if (viewerIsDoctor) message.sender == "doctor" else message.sender == "patient"
+    val importantKind = classifyImportantDoctorMessage(message.text, !viewerIsDoctor)
+    val bubbleColor = if (isMine) SupportOutgoingBubble else SupportIncomingBubble
+    val align = if (isMine) Alignment.End else Alignment.Start
+    val accent = when (importantKind) {
+        ImportantDoctorMessageKind.Prescription -> Color(0xFFFFD54F)
+        ImportantDoctorMessageKind.Plan -> Color(0xFF4DD0E1)
+        null -> Color.Transparent
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = align
+    ) {
+        if (importantKind != null) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(bottom = 4.dp, start = 4.dp, end = 4.dp)
+            ) {
+                Icon(
+                    imageVector = if (importantKind == ImportantDoctorMessageKind.Prescription) {
+                        Icons.Filled.Medication
+                    } else {
+                        Icons.Filled.Star
+                    },
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    text = if (importantKind == ImportantDoctorMessageKind.Prescription) {
+                        "Важно: рецепт"
+                    } else {
+                        "Важно: план лечения"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = accent,
+                    fontWeight = FontWeight.Bold,
+                    textDecoration = TextDecoration.Underline
+                )
             }
         }
+        Surface(
+            color = bubbleColor,
+            shape = RoundedCornerShape(16.dp),
+            modifier = if (importantKind != null) {
+                Modifier.border(2.dp, accent, RoundedCornerShape(16.dp))
+            } else {
+                Modifier
+            }
+        ) {
+            Text(
+                text = message.text,
+                color = SupportChatText,
+                fontWeight = if (importantKind != null) FontWeight.SemiBold else FontWeight.Normal,
+                textDecoration = if (importantKind != null) TextDecoration.Underline else TextDecoration.None,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+            )
+        }
+        Text(
+            text = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(message.createdAt)),
+            style = MaterialTheme.typography.labelSmall,
+            color = Color(0xFF94A3B8),
+            modifier = Modifier.padding(top = 2.dp, start = 4.dp, end = 4.dp)
+        )
     }
 }

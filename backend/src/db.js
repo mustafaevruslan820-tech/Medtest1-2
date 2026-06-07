@@ -174,4 +174,37 @@ function migrate(db) {
       FOREIGN KEY(assignment_id) REFERENCES doctor_assignments(id) ON DELETE CASCADE
     );
   `);
+
+  const assignmentColumns = db.prepare(`PRAGMA table_info(doctor_assignments)`).all();
+  if (!assignmentColumns.some((c) => c.name === 'rejection_reason')) {
+    db.exec(`ALTER TABLE doctor_assignments ADD COLUMN rejection_reason TEXT;`);
+  }
+  if (!assignmentColumns.some((c) => c.name === 'rejected_at')) {
+    db.exec(`ALTER TABLE doctor_assignments ADD COLUMN rejected_at INTEGER;`);
+  }
+
+  const prescriptionColumns = db.prepare(`PRAGMA table_info(doctor_prescriptions)`).all();
+  if (!prescriptionColumns.some((c) => c.name === 'patient_status')) {
+    db.exec(`ALTER TABLE doctor_prescriptions ADD COLUMN patient_status TEXT NOT NULL DEFAULT 'pending';`);
+  }
+  if (!prescriptionColumns.some((c) => c.name === 'decline_reason')) {
+    db.exec(`ALTER TABLE doctor_prescriptions ADD COLUMN decline_reason TEXT;`);
+  }
+  if (!prescriptionColumns.some((c) => c.name === 'responded_at')) {
+    db.exec(`ALTER TABLE doctor_prescriptions ADD COLUMN responded_at INTEGER;`);
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS care_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      assignment_id INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      metadata_json TEXT,
+      FOREIGN KEY(assignment_id) REFERENCES doctor_assignments(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_care_events_assignment
+      ON care_events(assignment_id, event_type, created_at);
+  `);
 }
