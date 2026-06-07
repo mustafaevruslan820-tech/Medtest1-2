@@ -68,6 +68,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -82,9 +83,30 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.PanTool
 import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Emergency
+import androidx.compose.material.icons.filled.Logout
+import androidx.compose.material.icons.filled.MedicalInformation
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.CalendarToday
+import androidx.compose.material.icons.filled.ContactPhone
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Wc
+import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.Bloodtype
+import androidx.compose.material.icons.filled.Height
+import androidx.compose.material.icons.filled.LocalHospital
+import androidx.compose.material.icons.filled.Medication
+import androidx.compose.material.icons.filled.MonitorWeight
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -199,15 +221,36 @@ import com.example.medtest1.data.UserProfile
 import com.example.medtest1.data.WellbeingEntry
 import com.example.medtest1.network.BackendApi
 import com.example.medtest1.network.SupportMessage
-import com.example.medtest1.notifications.SupportAdminNotifier
 import com.example.medtest1.notifications.SupportChatNotifier
 import com.example.medtest1.support.SupportAdminScreen
-import com.example.medtest1.support.SupportAgentInfo
 import com.example.medtest1.support.SupportChatScreen
+import com.example.medtest1.notifications.SupportAdminNotifier
+import com.example.medtest1.doctor.AdminPanelScreen
+import com.example.medtest1.doctor.DoctorPanelScreen
+import com.example.medtest1.doctor.DoctorPatientChatScreen
+import com.example.medtest1.doctor.DoctorProfileFormScreen
+import com.example.medtest1.doctor.isProfileReady
+import com.example.medtest1.doctor.DoctorTreatmentSection
+import com.example.medtest1.doctor.TreatmentReportOptionsDialog
+import com.example.medtest1.network.DoctorAssignment
+import com.example.medtest1.support.SupportAgentInfo
+import com.example.medtest1.support.SupportChatSession
+import com.example.medtest1.ui.HomeExpandableFolder
+import com.example.medtest1.ui.HomeBottomNavBar
+import com.example.medtest1.ui.MedClinicalInfoDialog
+import com.example.medtest1.ui.MedClinicalInfoRow
+import com.example.medtest1.ui.MedMenuCard
+import com.example.medtest1.ui.MedMenuRow
+import com.example.medtest1.ui.MedProfileField
+import com.example.medtest1.ui.MedSosHighlightCard
+import com.example.medtest1.ui.MedProfileHeader
+import com.example.medtest1.ui.MedSectionLabel
+import com.example.medtest1.ui.MedSubScreenLayout
+import com.example.medtest1.ui.MedSurfaceCard
+import com.example.medtest1.ui.MedScanIconButton
+import androidx.compose.material3.FilledTonalButton
 import com.google.firebase.messaging.FirebaseMessaging
 import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.ProcessLifecycleOwner
 import kotlinx.coroutines.tasks.await
 import com.example.medtest1.notifications.TreatmentReminderReceiver
 import com.example.medtest1.reports.exportTreatmentPlansToPdf
@@ -249,6 +292,9 @@ class MainActivity : ComponentActivity() {
         val databaseHelper = AppDatabaseHelper(this)
         val openSupportChat = intent?.getBooleanExtra(EXTRA_OPEN_SUPPORT_CHAT, false) == true
         val openSupportAdmin = intent?.getBooleanExtra(EXTRA_OPEN_SUPPORT_ADMIN, false) == true
+        val openDoctorPanel = intent?.getBooleanExtra(EXTRA_OPEN_DOCTOR_PANEL, false) == true
+        val openDoctorChat = intent?.getBooleanExtra(EXTRA_OPEN_DOCTOR_CHAT, false) == true
+        val openAssignmentId = intent?.getLongExtra(EXTRA_ASSIGNMENT_ID, 0L) ?: 0L
         enableEdgeToEdge()
         setContent {
             val context = LocalContext.current
@@ -264,6 +310,9 @@ class MainActivity : ComponentActivity() {
                     darkTheme = darkTheme,
                     initialOpenSupportChat = openSupportChat,
                     initialOpenSupportAdmin = openSupportAdmin,
+                    initialOpenDoctorPanel = openDoctorPanel,
+                    initialOpenDoctorChat = openDoctorChat,
+                    initialAssignmentId = openAssignmentId,
                     onDarkThemeChange = { d ->
                         darkTheme = d
                         themePrefs.edit { putBoolean("pref_dark_theme", d) }
@@ -276,6 +325,9 @@ class MainActivity : ComponentActivity() {
     companion object {
         const val EXTRA_OPEN_SUPPORT_CHAT = "extra_open_support_chat"
         const val EXTRA_OPEN_SUPPORT_ADMIN = "extra_open_support_admin"
+        const val EXTRA_OPEN_DOCTOR_PANEL = "extra_open_doctor_panel"
+        const val EXTRA_OPEN_DOCTOR_CHAT = "extra_open_doctor_chat"
+        const val EXTRA_ASSIGNMENT_ID = "extra_assignment_id"
     }
 }
 
@@ -294,6 +346,12 @@ private data class ScannedMedicineCodeInfo(
     val serial: String?
 )
 
+private data class HomeCompletedCourse(
+    val folderKey: Long,
+    val title: String,
+    val plans: List<TreatmentPlan>
+)
+
 private data class ScannedMedicineCandidate(
     val id: Long = 0L,
     val name: String,
@@ -304,7 +362,8 @@ private data class ScannedMedicineCandidate(
 
 private enum class HomeSnackbarKind {
     Added,
-    Renamed
+    Renamed,
+    Info
 }
 
 private fun clearRestoredSessionIfNeeded(context: Context, sessionPrefs: android.content.SharedPreferences) {
@@ -376,7 +435,6 @@ private enum class AssistantTourSpotlight {
     HomeNavNext,
     HomeScanner,
     HomeProfile,
-    TreatmentRefresh,
     TreatmentPeriodCard,
     TreatmentTabs,
     DiaryDayStrip,
@@ -560,6 +618,9 @@ private suspend fun registerSupportFcmToken(sessionPrefs: android.content.Shared
     }
 }
 
+private fun isAdminSession(username: String, role: String): Boolean =
+    role.equals("admin", ignoreCase = true) || username.equals("Admin", ignoreCase = true)
+
 private fun markAdminMessagesNotified(
     sessionPrefs: android.content.SharedPreferences,
     messages: List<SupportMessage>
@@ -577,6 +638,9 @@ private fun MedApp(
     darkTheme: Boolean,
     initialOpenSupportChat: Boolean = false,
     initialOpenSupportAdmin: Boolean = false,
+    initialOpenDoctorPanel: Boolean = false,
+    initialOpenDoctorChat: Boolean = false,
+    initialAssignmentId: Long = 0L,
     onDarkThemeChange: (Boolean) -> Unit
 ) {
     var currentScreen by remember { mutableStateOf(Screen.Onboarding) }
@@ -593,23 +657,18 @@ private fun MedApp(
     val sessionPrefs = remember(context) {
         context.getSharedPreferences("medtest_session", Context.MODE_PRIVATE)
     }
-    var appInForeground by remember { mutableStateOf(false) }
     var pendingOpenSupportChat by remember { mutableStateOf(initialOpenSupportChat) }
     var pendingOpenSupportAdmin by remember { mutableStateOf(initialOpenSupportAdmin) }
+    var pendingOpenDoctorPanel by remember { mutableStateOf(initialOpenDoctorPanel) }
+    var pendingOpenDoctorChat by remember { mutableStateOf(initialOpenDoctorChat) }
+    var pendingAssignmentId by remember { mutableStateOf(initialAssignmentId) }
+    var userRole by remember { mutableStateOf("patient") }
+    var patientAssignment by remember { mutableStateOf<DoctorAssignment?>(null) }
+    var doctorChatAssignmentId by remember { mutableStateOf(0L) }
+    var doctorChatTitle by remember { mutableStateOf("") }
+    var doctorChatAsDoctor by remember { mutableStateOf(false) }
     val activity = context as? Activity
 
-    androidx.compose.runtime.DisposableEffect(Unit) {
-        val observer = LifecycleEventObserver { _, _ ->
-            appInForeground = ProcessLifecycleOwner.get().lifecycle.currentState
-                .isAtLeast(Lifecycle.State.STARTED)
-        }
-        ProcessLifecycleOwner.get().lifecycle.addObserver(observer)
-        appInForeground = ProcessLifecycleOwner.get().lifecycle.currentState
-            .isAtLeast(Lifecycle.State.STARTED)
-        onDispose {
-            ProcessLifecycleOwner.get().lifecycle.removeObserver(observer)
-        }
-    }
     val alarmManager = context.getSystemService(AlarmManager::class.java)
     var showAssistantTour by remember { mutableStateOf(false) }
     var assistantTourStep by remember { mutableIntStateOf(0) }
@@ -617,7 +676,7 @@ private fun MedApp(
     val assistantTourSteps = remember {
         listOf(
             AssistantTourStep(
-                title = "Бот-Умник",
+                title = "Умник",
                 body = "Помощник и этот тур — нажмите снова в любой момент.",
                 spotlight = AssistantTourSpotlight.HomeUmnik,
                 targetScreen = Screen.Home
@@ -678,12 +737,6 @@ private fun MedApp(
                 extraText = "Блок «Сканированные таблетки»: сортировка, «Перейти» к справке, «Изменить» название, «Удалить» запись — без отдельной подсветки."
             ),
             AssistantTourStep(
-                title = "Обновить план",
-                body = "Обновить списки приёмов по времени.",
-                spotlight = AssistantTourSpotlight.TreatmentRefresh,
-                targetScreen = Screen.Treatment
-            ),
-            AssistantTourStep(
                 title = "Период курса",
                 body = "Даты начала и конца, затем заполнение по дням.",
                 spotlight = AssistantTourSpotlight.TreatmentPeriodCard,
@@ -738,7 +791,7 @@ private fun MedApp(
                 body = "Дополнительные действия без подсветки.",
                 spotlight = AssistantTourSpotlight.None,
                 targetScreen = Screen.PersonalProfile,
-                extraText = "«Настройки» — звук уведомлений и аккаунт. «Редактировать профиль» — анкета. «Назад» — на главную."
+                extraText = "В разделе «Разделы»: настройки, редактирование анкеты. Стрелка «Назад» вверху — на главную."
             ),
             AssistantTourStep(
                 title = "Звук напоминаний",
@@ -757,6 +810,39 @@ private fun MedApp(
     }
     val assistantSpotlight = assistantTourSteps.getOrNull(assistantTourStep)?.spotlight
         ?: AssistantTourSpotlight.None
+
+    fun navigateAfterAuth(role: String, hasLocalProfile: Boolean) {
+        val effectiveRole = when {
+            role.equals("admin", ignoreCase = true) -> "admin"
+            activeUser.equals("Admin", ignoreCase = true) -> "admin"
+            else -> role
+        }
+        userRole = effectiveRole
+        sessionPrefs.edit { putString("user_role", effectiveRole) }
+        when (effectiveRole) {
+            "admin" -> currentScreen = Screen.Home
+            "doctor" -> {
+                scope.launch {
+                    val token = sessionPrefs.getString("auth_token", "").orEmpty()
+                    val profile = if (token.isNotBlank()) {
+                        runCatching { BackendApi.getMyDoctorProfile(token) }.getOrNull()
+                    } else {
+                        null
+                    }
+                    val hadCompleteProfile = sessionPrefs.getBoolean("doctor_profile_complete", false)
+                    currentScreen = when {
+                        profile.isProfileReady() -> {
+                            sessionPrefs.edit { putBoolean("doctor_profile_complete", true) }
+                            Screen.DoctorPanel
+                        }
+                        profile == null && hadCompleteProfile -> Screen.DoctorPanel
+                        else -> Screen.DoctorProfileForm
+                    }
+                }
+            }
+            else -> currentScreen = if (hasLocalProfile) Screen.Home else Screen.Profile
+        }
+    }
 
     fun refreshHomeData(username: String) {
         if (username.isBlank()) return
@@ -783,6 +869,21 @@ private fun MedApp(
         if (activeUser.isNotBlank()) {
             refreshHomeData(activeUser)
             registerSupportFcmToken(sessionPrefs)
+            val token = sessionPrefs.getString("auth_token", "").orEmpty()
+            if (token.isNotBlank()) {
+                val me = runCatching { BackendApi.fetchMe(token) }.getOrNull()
+                if (me?.ok == true && !me.role.isNullOrBlank()) {
+                    val role = if (isAdminSession(activeUser, me.role)) "admin" else me.role
+                    userRole = role
+                    sessionPrefs.edit { putString("user_role", role) }
+                } else if (activeUser.equals("Admin", ignoreCase = true)) {
+                    userRole = "admin"
+                    sessionPrefs.edit { putString("user_role", "admin") }
+                }
+                if (userRole == "patient") {
+                    patientAssignment = runCatching { BackendApi.getPatientAssignment(token) }.getOrNull()
+                }
+            }
         } else {
             savedMedicines.clear()
             persistedScannedMedicines.clear()
@@ -803,42 +904,42 @@ private fun MedApp(
         }
     }
 
-    LaunchedEffect(activeUser, currentScreen) {
-        if (!activeUser.equals("Admin", ignoreCase = true)) return@LaunchedEffect
-        SupportAdminNotifier.ensureChannel(context)
-        while (true) {
-            val adminKey = sessionPrefs.getString("support_admin_key", "").orEmpty()
-            if (adminKey.isNotBlank() && currentScreen != Screen.SupportAdmin) {
-                val res = runCatching { BackendApi.adminListSupportConversationsDetailed(adminKey) }.getOrNull()
-                val urgent = res?.conversations
-                    ?.filter { it.needsAdminAttention }
-                    ?.maxByOrNull { it.adminRequestedAt }
-                if (urgent != null) {
-                    val lastNotified = sessionPrefs.getLong("admin_last_escalation_at", 0L)
-                    if (urgent.adminRequestedAt > lastNotified) {
-                        SupportAdminNotifier.showEscalation(
-                            context,
-                            urgent.username,
-                            "Пользователь просит специалиста Умник"
-                        )
-                        sessionPrefs.edit {
-                            putLong("admin_last_escalation_at", urgent.adminRequestedAt)
-                        }
-                    }
-                }
-            }
-            delay(3000)
+    LaunchedEffect(activeUser, pendingOpenDoctorPanel) {
+        if (activeUser.isNotBlank() && pendingOpenDoctorPanel) {
+            currentScreen = Screen.DoctorPanel
+            pendingOpenDoctorPanel = false
         }
     }
 
-    LaunchedEffect(activeUser, currentScreen, appInForeground) {
+    LaunchedEffect(activeUser, pendingOpenDoctorChat, pendingAssignmentId) {
+        if (activeUser.isNotBlank() && pendingOpenDoctorChat && pendingAssignmentId > 0L) {
+            doctorChatAssignmentId = pendingAssignmentId
+            doctorChatTitle = if (userRole == "doctor") "Чат с пациентом" else "Чат с врачом"
+            doctorChatAsDoctor = userRole == "doctor"
+            currentScreen = Screen.DoctorPatientChat
+            pendingOpenDoctorChat = false
+            pendingAssignmentId = 0L
+        }
+    }
+
+    LaunchedEffect(activeUser) {
+        if (activeUser.isBlank()) return@LaunchedEffect
+        registerSupportFcmToken(sessionPrefs)
+        while (activeUser.isNotBlank()) {
+            delay(120_000)
+            registerSupportFcmToken(sessionPrefs)
+        }
+    }
+
+    LaunchedEffect(activeUser, currentScreen) {
         if (activeUser.isBlank()) return@LaunchedEffect
         SupportChatNotifier.ensureChannel(context)
         while (true) {
             val token = sessionPrefs.getString("auth_token", "").orEmpty()
             if (token.isNotBlank()) {
                 val messages = runCatching { BackendApi.getSupportMessages(token) }.getOrDefault(emptyList())
-                if (currentScreen == Screen.SupportChat) {
+                val inOpenChat = currentScreen == Screen.SupportChat && SupportChatSession.isUserInChat
+                if (inOpenChat) {
                     markAdminMessagesNotified(sessionPrefs, messages)
                     runCatching { BackendApi.markSupportRead(token) }
                 } else {
@@ -847,7 +948,7 @@ private fun MedApp(
                         .filter { it.sender == "admin" && it.id > lastNotified }
                         .maxByOrNull { it.id }
                     if (freshAdmin != null) {
-                        val preview = freshAdmin.text.ifBlank { "Вам ответили в поддержке" }
+                        val preview = freshAdmin.text.ifBlank { "Вам ответили на сообщение" }
                         SupportChatNotifier.showNewAdminReply(
                             context,
                             preview,
@@ -855,6 +956,32 @@ private fun MedApp(
                         )
                         sessionPrefs.edit { putLong("support_last_notified_admin_id", freshAdmin.id) }
                     }
+                }
+            }
+            delay(1500)
+        }
+    }
+
+    LaunchedEffect(activeUser, currentScreen) {
+        if (!activeUser.equals("Admin", ignoreCase = true)) return@LaunchedEffect
+        SupportAdminNotifier.ensureChannel(context)
+        while (true) {
+            val key = sessionPrefs.getString("support_admin_key", "").orEmpty().trim()
+            if (key.isNotBlank() && currentScreen != Screen.SupportAdmin) {
+                val lastTs = sessionPrefs.getLong("support_last_admin_escalation_ts", 0L)
+                val convs = runCatching {
+                    BackendApi.adminListSupportConversationsDetailed(key).conversations
+                }.getOrDefault(emptyList())
+                val urgent = convs
+                    .filter { it.needsAdminAttention && it.adminRequestedAt > lastTs }
+                    .maxByOrNull { it.adminRequestedAt }
+                if (urgent != null) {
+                    SupportAdminNotifier.showEscalation(
+                        context,
+                        urgent.username.ifBlank { "Пользователь" },
+                        "Просит специалиста Умника"
+                    )
+                    sessionPrefs.edit { putLong("support_last_admin_escalation_ts", urgent.adminRequestedAt) }
                 }
             }
             delay(3000)
@@ -882,12 +1009,37 @@ private fun MedApp(
         val savedUser = sessionPrefs.getString("active_user", "").orEmpty()
         if (savedUser.isNotBlank()) {
             activeUser = savedUser
+            userRole = sessionPrefs.getString("user_role", "patient").orEmpty().ifBlank { "patient" }
+            if (isAdminSession(savedUser, userRole)) {
+                userRole = "admin"
+                sessionPrefs.edit { putString("user_role", "admin") }
+            }
             prefillProfile = databaseHelper.getProfile(savedUser)
             treatmentPlans.clear()
             treatmentPlans.addAll(databaseHelper.getTreatmentPlans(savedUser))
             wellbeingEntries.clear()
             wellbeingEntries.putAll(databaseHelper.getWellbeingEntries(savedUser))
-            currentScreen = if (prefillProfile == null) Screen.Profile else Screen.Home
+            val token = sessionPrefs.getString("auth_token", "").orEmpty()
+            currentScreen = when (userRole) {
+                "admin" -> Screen.Home
+                "doctor" -> {
+                    val profile = if (token.isNotBlank()) {
+                        runCatching { BackendApi.getMyDoctorProfile(token) }.getOrNull()
+                    } else {
+                        null
+                    }
+                    val hadCompleteProfile = sessionPrefs.getBoolean("doctor_profile_complete", false)
+                    when {
+                        profile.isProfileReady() -> {
+                            sessionPrefs.edit { putBoolean("doctor_profile_complete", true) }
+                            Screen.DoctorPanel
+                        }
+                        profile == null && hadCompleteProfile -> Screen.DoctorPanel
+                        else -> Screen.DoctorProfileForm
+                    }
+                }
+                else -> if (prefillProfile == null) Screen.Profile else Screen.Home
+            }
         }
         val minLoadingDurationMs = 1200L
         val elapsedMs = System.currentTimeMillis() - launchStartedAt
@@ -904,6 +1056,12 @@ private fun MedApp(
             Screen.Settings -> currentScreen = Screen.PersonalProfile
             Screen.SupportChat -> currentScreen = Screen.Settings
             Screen.SupportAdmin -> currentScreen = Screen.Settings
+            Screen.AdminPanel -> currentScreen = Screen.Home
+            Screen.DoctorPanel -> activity?.finish()
+            Screen.DoctorProfileForm -> currentScreen = Screen.DoctorPanel
+            Screen.DoctorPatientChat -> {
+                currentScreen = if (doctorChatAsDoctor) Screen.DoctorPanel else Screen.Treatment
+            }
             Screen.PersonalProfile -> currentScreen = Screen.Home
             Screen.Home -> currentScreen = Screen.Profile
             Screen.Profile -> currentScreen = if (prefillProfile == null) Screen.Login else Screen.PersonalProfile
@@ -1007,7 +1165,7 @@ private fun MedApp(
                                             wellbeingEntries.clear()
                                             wellbeingEntries.putAll(databaseHelper.getWellbeingEntries(activeUser))
                                             syncFirebaseAuthUser(context, email.trim().lowercase(), password)
-                                            currentScreen = if (prefillProfile == null) Screen.Profile else Screen.Home
+                                            navigateAfterAuth(reg.role, prefillProfile != null)
                                             snackbarHostState.showSnackbar("Аккаунт снова привязан к серверу (база на ПК была новой).")
                                             return@launch
                                         }
@@ -1077,8 +1235,7 @@ private fun MedApp(
                                                         wellbeingEntries.putAll(
                                                             databaseHelper.getWellbeingEntries(activeUser)
                                                         )
-                                                        currentScreen =
-                                                            if (prefillProfile == null) Screen.Profile else Screen.Home
+                                                        navigateAfterAuth(sync.role, prefillProfile != null)
                                                         return@launch
                                                     }
                                                     if (sync?.error == "firebase_admin_not_configured") {
@@ -1092,19 +1249,13 @@ private fun MedApp(
                                         }
                                     }
                                 }
-                                val backendHint = BuildConfig.BACKEND_BASE_URL
                                 snackbarHostState.showSnackbar(
-                                    when {
-                                        auth?.error == "network_error" || auth?.error == "empty_response" ->
-                                            "Сервер недоступен ($backendHint). Проверьте интернет и что backend запущен."
-                                        wrongCreds && normalized.equals("Admin", ignoreCase = true) ->
-                                            "Admin: пароль = ADMIN_PASSWORD на Render (сейчас не ADMIN_KEY). " +
-                                                "Сборка ходит на $backendHint. После смены пароля — Redeploy backend " +
-                                                "и вызов POST /api/admin/sync-admin-login с x-admin-key."
-                                        wrongCreds ->
-                                            "Неверный логин или пароль (сервер: $backendHint)."
-                                        else ->
-                                            "Не удалось войти. Попробуйте позже."
+                                    if (auth?.error == "network_error" || auth?.error == "empty_response") {
+                                        "Сервер недоступен. Проверьте backend и адрес в приложении."
+                                    } else if (wrongCreds) {
+                                        "Неверный логин или пароль."
+                                    } else {
+                                        "Не удалось войти. Попробуйте позже."
                                     }
                                 )
                                 return@launch
@@ -1125,7 +1276,7 @@ private fun MedApp(
                             if (!loggedEmail.isNullOrBlank()) {
                                 syncFirebaseAuthUser(context, loggedEmail, password)
                             }
-                            currentScreen = if (prefillProfile == null) Screen.Profile else Screen.Home
+                            navigateAfterAuth(auth.role, prefillProfile != null)
                         }
                     }
                 },
@@ -1280,7 +1431,12 @@ private fun MedApp(
                 username = activeUser,
                 profile = prefillProfile,
                 plans = treatmentPlans,
+                wellbeingEntries = wellbeingEntries,
                 isReportReady = isReportReadyForExport(treatmentPlans, wellbeingEntries),
+                isAdmin = isAdminSession(activeUser, userRole),
+                patientAssignmentId = patientAssignment?.id,
+                tokenProvider = { sessionPrefs.getString("auth_token", "").orEmpty() },
+                onOpenAdminPanel = { currentScreen = Screen.AdminPanel },
                 onStartTreatment = { currentScreen = Screen.Treatment },
                 onStopTreatment = {
                     val deleted = databaseHelper.deleteTreatmentPlansForUser(activeUser)
@@ -1391,6 +1547,8 @@ private fun MedApp(
             Screen.Settings -> SettingsScreen(
                 modifier = Modifier.padding(innerPadding),
                 profile = prefillProfile,
+                recentMedications24h = recentMedicationsLast24Hours(treatmentPlans),
+                isAdmin = isAdminSession(activeUser, userRole),
                 isDarkTheme = darkTheme,
                 onDarkThemeChange = onDarkThemeChange,
                 assistantTourActive = showAssistantTour,
@@ -1412,6 +1570,7 @@ private fun MedApp(
                     sessionPrefs.edit {
                         remove("active_user")
                         remove("auth_token")
+                        remove("user_role")
                     }
                     activeUser = ""
                     prefillProfile = null
@@ -1433,8 +1592,10 @@ private fun MedApp(
                             sessionPrefs.edit {
                                 remove("active_user")
                                 remove("auth_token")
+                                remove("user_role")
                             }
                             activeUser = ""
+                            userRole = "patient"
                             prefillProfile = null
                             treatmentPlans.clear()
                             wellbeingEntries.clear()
@@ -1453,6 +1614,7 @@ private fun MedApp(
                 },
                 onOpenSupportChat = { currentScreen = Screen.SupportChat },
                 onOpenSupportAdmin = { currentScreen = Screen.SupportAdmin },
+                onOpenAdminPanel = { currentScreen = Screen.AdminPanel },
                 onBack = { currentScreen = Screen.PersonalProfile }
             )
 
@@ -1471,10 +1633,73 @@ private fun MedApp(
                 onBack = { currentScreen = Screen.Settings }
             )
 
+            Screen.AdminPanel -> AdminPanelScreen(
+                modifier = Modifier.padding(innerPadding),
+                tokenProvider = { sessionPrefs.getString("auth_token", "").orEmpty() },
+                adminKeyProvider = { sessionPrefs.getString("support_admin_key", "").orEmpty() },
+                onSaveAdminKey = { key ->
+                    sessionPrefs.edit { putString("support_admin_key", key) }
+                },
+                onBack = { currentScreen = Screen.Home }
+            )
+
+            Screen.DoctorPanel -> DoctorPanelScreen(
+                modifier = Modifier.padding(innerPadding),
+                tokenProvider = { sessionPrefs.getString("auth_token", "").orEmpty() },
+                onEditProfile = { currentScreen = Screen.DoctorProfileForm },
+                onOpenChat = { assignmentId, patientName ->
+                    doctorChatAssignmentId = assignmentId
+                    doctorChatTitle = patientName
+                    doctorChatAsDoctor = true
+                    currentScreen = Screen.DoctorPatientChat
+                },
+                onBack = {
+                    sessionPrefs.edit {
+                        remove("active_user")
+                        remove("auth_token")
+                        remove("user_role")
+                    }
+                    activeUser = ""
+                    userRole = "patient"
+                    currentScreen = Screen.Login
+                }
+            )
+
+            Screen.DoctorProfileForm -> DoctorProfileFormScreen(
+                modifier = Modifier.padding(innerPadding),
+                tokenProvider = { sessionPrefs.getString("auth_token", "").orEmpty() },
+                onProfileSaved = {
+                    sessionPrefs.edit { putBoolean("doctor_profile_complete", true) }
+                    currentScreen = Screen.DoctorPanel
+                },
+                onBack = { currentScreen = Screen.DoctorPanel }
+            )
+
+            Screen.DoctorPatientChat -> DoctorPatientChatScreen(
+                modifier = Modifier.padding(innerPadding),
+                tokenProvider = { sessionPrefs.getString("auth_token", "").orEmpty() },
+                assignmentId = doctorChatAssignmentId,
+                title = doctorChatTitle,
+                viewerIsDoctor = doctorChatAsDoctor,
+                onBack = {
+                    currentScreen = if (doctorChatAsDoctor) Screen.DoctorPanel else Screen.Treatment
+                }
+            )
+
             Screen.Treatment -> TreatmentScreen(
                 modifier = Modifier.padding(innerPadding),
                 username = activeUser,
+                profile = prefillProfile,
                 plans = treatmentPlans,
+                wellbeingEntries = wellbeingEntries,
+                tokenProvider = { sessionPrefs.getString("auth_token", "").orEmpty() },
+                onAssignmentChanged = { patientAssignment = it },
+                onOpenDoctorChat = { assignmentId, doctorName ->
+                    doctorChatAssignmentId = assignmentId
+                    doctorChatTitle = doctorName
+                    doctorChatAsDoctor = false
+                    currentScreen = Screen.DoctorPatientChat
+                },
                 assistantTourActive = showAssistantTour,
                 assistantSpotlight = assistantSpotlight,
                 onAssistantSpotlightBounds = { assistantSpotlightBounds = it },
@@ -1696,7 +1921,7 @@ private fun AssistantTourOverlay(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "Бот-Умник — справка по приложению",
+                        text = "Умник — справка по приложению",
                         style = MaterialTheme.typography.titleMedium,
                         color = scheme.onSurface
                     )
@@ -3563,7 +3788,12 @@ private fun HomeScreen(
     username: String,
     profile: UserProfile?,
     plans: List<TreatmentPlan>,
+    wellbeingEntries: Map<String, WellbeingEntry>,
     isReportReady: Boolean,
+    isAdmin: Boolean,
+    patientAssignmentId: Long?,
+    tokenProvider: () -> String,
+    onOpenAdminPanel: () -> Unit,
     onStartTreatment: () -> Unit,
     onStopTreatment: () -> Unit,
     onOpenDiary: () -> Unit,
@@ -3601,6 +3831,7 @@ private fun HomeScreen(
     var showNextPlanDialog by remember { mutableStateOf(false) }
     var nextPlanPreview by remember { mutableStateOf<TreatmentPlan?>(null) }
     var showReportBlockedDialog by remember { mutableStateOf(false) }
+    var showReportOptionsDialog by remember { mutableStateOf(false) }
     var showStopConfirmDialog by remember { mutableStateOf(false) }
     var showNoTreatmentDialog by remember { mutableStateOf(false) }
     var selectedBottomTab by remember { mutableStateOf("plan") }
@@ -3626,6 +3857,9 @@ private fun HomeScreen(
             persistedScannedMedicines.sortedBy { it.name.lowercase(Locale.getDefault()) }
         }
     }
+    val completedCourses = remember(plans) { homeCompletedCourses(plans) }
+    val showHomeLibrary = persistedScannedMedicines.isNotEmpty() || completedCourses.isNotEmpty()
+    val completedCourseExpanded = remember { mutableStateMapOf<Long, Boolean>() }
     fun showHomeSnackbar(message: String, kind: HomeSnackbarKind) {
         homeScope.launch {
             homeSnackbarKind = kind
@@ -3791,147 +4025,43 @@ private fun HomeScreen(
             }
         },
         bottomBar = {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shadowElevation = 8.dp,
-                tonalElevation = 2.dp,
-                color = MaterialTheme.colorScheme.surfaceContainer
-            ) {
-                Column {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(uiMetrics.bottomBarHeight)
-                            .padding(top = 4.dp, bottom = 2.dp),
-                        verticalAlignment = Alignment.Bottom,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(
-                            Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(12.dp))
-                                .assistantTourTarget(
-                                    active = assistantTourActive && assistantSpotlight == AssistantTourSpotlight.HomeNavTreatment,
-                                    pulseScale = spotlightScale(AssistantTourSpotlight.HomeNavTreatment),
-                                    shape = RoundedCornerShape(12.dp),
-                                    borderColor = scheme.primary,
-                                    onBounds = { onAssistantSpotlightBounds(it) }
-                                )
-                                .clickable {
-                                    selectedBottomTab = "plan"
-                                    onStartTreatment()
-                                }
-                                .padding(top = 12.dp, bottom = 0.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            val planScale by animateFloatAsState(
-                                targetValue = if (selectedBottomTab == "plan") 1.14f else 1f,
-                                animationSpec = tween(280),
-                                label = "plan-scale"
-                            )
-                            Icon(
-                                painter = painterResource(android.R.drawable.ic_menu_agenda),
-                                contentDescription = "Лечение",
-                                modifier = Modifier
-                                    .size(uiMetrics.bottomBarIconSize)
-                                    .scale(planScale),
-                                tint = if (selectedBottomTab == "plan") app.tabPlanSelected else app.tabUnselected
-                            )
-                            Text(
-                                "Лечение",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (selectedBottomTab == "plan") app.tabPlanSelected else app.tabUnselected,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        Column(
-                            Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(12.dp))
-                                .assistantTourTarget(
-                                    active = assistantTourActive && assistantSpotlight == AssistantTourSpotlight.HomeNavDiary,
-                                    pulseScale = spotlightScale(AssistantTourSpotlight.HomeNavDiary),
-                                    shape = RoundedCornerShape(12.dp),
-                                    borderColor = scheme.primary,
-                                    onBounds = { onAssistantSpotlightBounds(it) }
-                                )
-                                .clickable {
-                                    selectedBottomTab = "diary"
-                                    onOpenDiary()
-                                }
-                                .padding(top = 12.dp, bottom = 0.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            val diaryScale by animateFloatAsState(
-                                targetValue = if (selectedBottomTab == "diary") 1.14f else 1f,
-                                animationSpec = tween(280),
-                                label = "diary-scale"
-                            )
-                            Icon(
-                                imageVector = Icons.Filled.EditNote,
-                                contentDescription = "Дневник",
-                                modifier = Modifier
-                                    .size(uiMetrics.bottomBarIconSize)
-                                    .scale(diaryScale),
-                                tint = if (selectedBottomTab == "diary") app.tabDiarySelected else app.tabUnselected
-                            )
-                            Text(
-                                "Дневник",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (selectedBottomTab == "diary") app.tabDiarySelected else app.tabUnselected,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        Column(
-                            Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(12.dp))
-                                .assistantTourTarget(
-                                    active = assistantTourActive && assistantSpotlight == AssistantTourSpotlight.HomeNavNext,
-                                    pulseScale = spotlightScale(AssistantTourSpotlight.HomeNavNext),
-                                    shape = RoundedCornerShape(12.dp),
-                                    borderColor = scheme.primary,
-                                    onBounds = { onAssistantSpotlightBounds(it) }
-                                )
-                                .clickable {
-                                    selectedBottomTab = "next"
-                                    nextPlanPreview = findNextPlan(plans)
-                                    showNextPlanDialog = true
-                                }
-                                .padding(top = 12.dp, bottom = 0.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            val nextScale by animateFloatAsState(
-                                targetValue = if (selectedBottomTab == "next") 1.14f else 1f,
-                                animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy),
-                                label = "next-scale"
-                            )
-                            Icon(
-                                painter = painterResource(android.R.drawable.ic_menu_recent_history),
-                                contentDescription = "Далее",
-                                modifier = Modifier
-                                    .size(uiMetrics.bottomBarIconSize)
-                                    .scale(nextScale),
-                                tint = if (selectedBottomTab == "next") app.tabNextSelected else app.tabUnselected
-                            )
-                            Text(
-                                "Далее",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (selectedBottomTab == "next") app.tabNextSelected else app.tabUnselected,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                    Spacer(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .navigationBarsPadding()
-                    )
-                }
-            }
+            HomeBottomNavBar(
+                selectedTab = selectedBottomTab,
+                onTreatment = {
+                    selectedBottomTab = "plan"
+                    onStartTreatment()
+                },
+                onDiary = {
+                    selectedBottomTab = "diary"
+                    onOpenDiary()
+                },
+                onNext = {
+                    selectedBottomTab = "next"
+                    nextPlanPreview = findNextPlan(plans)
+                    showNextPlanDialog = true
+                },
+                planTabModifier = Modifier.assistantTourTarget(
+                    active = assistantTourActive && assistantSpotlight == AssistantTourSpotlight.HomeNavTreatment,
+                    pulseScale = spotlightScale(AssistantTourSpotlight.HomeNavTreatment),
+                    shape = RoundedCornerShape(16.dp),
+                    borderColor = scheme.primary,
+                    onBounds = { onAssistantSpotlightBounds(it) }
+                ),
+                diaryTabModifier = Modifier.assistantTourTarget(
+                    active = assistantTourActive && assistantSpotlight == AssistantTourSpotlight.HomeNavDiary,
+                    pulseScale = spotlightScale(AssistantTourSpotlight.HomeNavDiary),
+                    shape = RoundedCornerShape(16.dp),
+                    borderColor = scheme.primary,
+                    onBounds = { onAssistantSpotlightBounds(it) }
+                ),
+                nextTabModifier = Modifier.assistantTourTarget(
+                    active = assistantTourActive && assistantSpotlight == AssistantTourSpotlight.HomeNavNext,
+                    pulseScale = spotlightScale(AssistantTourSpotlight.HomeNavNext),
+                    shape = RoundedCornerShape(16.dp),
+                    borderColor = scheme.primary,
+                    onBounds = { onAssistantSpotlightBounds(it) }
+                )
+            )
         }
     ) { innerPadding ->
         Box(
@@ -3970,6 +4100,27 @@ private fun HomeScreen(
                     "Управляйте планами лечения и отслеживайте самочувствие.",
                     color = app.onHeroMuted
                 )
+            AnimatedVisibility(
+                visible = isAdmin,
+                enter = fadeIn(tween(380)) + slideInVertically(tween(380)) { it / 8 }
+            ) {
+                Button(
+                    onClick = onOpenAdminPanel,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = scheme.tertiaryContainer,
+                        contentColor = scheme.onTertiaryContainer
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.AdminPanelSettings,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Админ-панель")
+                }
+            }
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = app.cardOnHero)
@@ -3999,8 +4150,8 @@ private fun HomeScreen(
                                 onBounds = { onAssistantSpotlightBounds(it) }
                             ),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = scheme.errorContainer,
-                            contentColor = scheme.onErrorContainer
+                            containerColor = scheme.tertiaryContainer,
+                            contentColor = scheme.onTertiaryContainer
                         )
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -4057,7 +4208,7 @@ private fun HomeScreen(
                     Button(
                         onClick = {
                             if (isReportReady) {
-                                createPdfLauncher.launch("treatment_report_$username.pdf")
+                                showReportOptionsDialog = true
                             } else {
                                 showReportBlockedDialog = true
                             }
@@ -4095,93 +4246,183 @@ private fun HomeScreen(
                     }
                 }
             }
-            if (persistedScannedMedicines.isNotEmpty()) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = scheme.primaryContainer)
-                ) {
-                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+            AnimatedVisibility(
+                visible = showHomeLibrary,
+                enter = fadeIn(tween(400)) + slideInVertically(tween(420), initialOffsetY = { it / 5 })
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "Медиатека",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = scheme.onSurface
+                    )
+                    if (persistedScannedMedicines.isNotEmpty()) {
+                        HomeExpandableFolder(
+                            title = "Отсканированные упаковки",
+                            subtitle = "${persistedScannedMedicines.size} шт.",
+                            icon = Icons.Filled.QrCode2,
+                            accent = scheme.primary,
+                            onAccent = scheme.onPrimaryContainer,
+                            surfaceColor = scheme.primaryContainer
                         ) {
-                            Text("Сканированные таблетки", fontWeight = FontWeight.SemiBold, color = scheme.onPrimaryContainer)
-                            Box {
-                                IconButton(onClick = { scannedSortMenuExpanded = true }) {
-                                    Icon(
-                                        imageVector = Icons.Filled.Sort,
-                                        contentDescription = "Сортировка списка таблеток",
-                                        tint = scheme.onPrimaryContainer
-                                    )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                Box {
+                                    IconButton(onClick = { scannedSortMenuExpanded = true }) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Sort,
+                                            contentDescription = "Сортировка",
+                                            tint = scheme.onPrimaryContainer
+                                        )
+                                    }
+                                    DropdownMenu(
+                                        expanded = scannedSortMenuExpanded,
+                                        onDismissRequest = { scannedSortMenuExpanded = false }
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text("По дате сканирования") },
+                                            onClick = {
+                                                scannedSortOption = ScannedMedicineSortOption.ByDate
+                                                scannedSortMenuExpanded = false
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("По алфавиту") },
+                                            onClick = {
+                                                scannedSortOption = ScannedMedicineSortOption.ByAlphabet
+                                                scannedSortMenuExpanded = false
+                                            }
+                                        )
+                                    }
                                 }
-                                DropdownMenu(
-                                    expanded = scannedSortMenuExpanded,
-                                    onDismissRequest = { scannedSortMenuExpanded = false }
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text("По дате сканирования") },
-                                        onClick = {
-                                            scannedSortOption = ScannedMedicineSortOption.ByDate
-                                            scannedSortMenuExpanded = false
-                                        }
+                            }
+                            displayedScannedMedicines.forEachIndexed { index, confirmed ->
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(confirmed.name, color = scheme.onPrimaryContainer, fontWeight = FontWeight.Medium)
+                                    Text(
+                                        "Штрихкод: ${confirmed.barcode}",
+                                        color = scheme.onPrimaryContainer.copy(alpha = 0.85f)
                                     )
-                                    DropdownMenuItem(
-                                        text = { Text("По алфавиту") },
-                                        onClick = {
-                                            scannedSortOption = ScannedMedicineSortOption.ByAlphabet
-                                            scannedSortMenuExpanded = false
-                                        }
+                                    Text(
+                                        "Дата: ${formatScannedMedicineDateTime(confirmed.scannedAtMillis)}",
+                                        color = scheme.onPrimaryContainer.copy(alpha = 0.85f)
                                     )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(
+                                            onClick = {
+                                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(confirmed.infoUrl))
+                                                runCatching { context.startActivity(intent) }
+                                            },
+                                            modifier = Modifier.weight(1f)
+                                        ) { Text("Перейти") }
+                                        Button(
+                                            onClick = {
+                                                medicineToEdit = confirmed
+                                                editableMedicineName = confirmed.name
+                                            },
+                                            modifier = Modifier.weight(1f),
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = scheme.surface,
+                                                contentColor = scheme.primary
+                                            )
+                                        ) { Text("Изменить") }
+                                    }
+                                    OutlinedButton(
+                                        onClick = { onDeleteScannedMedicine(confirmed) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = scheme.error)
+                                    ) { Text("Удалить") }
+                                }
+                                if (index < displayedScannedMedicines.lastIndex) {
+                                    HorizontalDivider(color = scheme.outlineVariant)
                                 }
                             }
                         }
-                        displayedScannedMedicines.forEachIndexed { index, confirmed ->
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(confirmed.name, color = scheme.onPrimaryContainer, fontWeight = FontWeight.Medium)
-                                Text("Штрихкод: ${confirmed.barcode}", color = scheme.onPrimaryContainer.copy(alpha = 0.85f))
-                                Text(
-                                    "Дата сканирования: ${formatScannedMedicineDateTime(confirmed.scannedAtMillis)}",
-                                    color = scheme.onPrimaryContainer.copy(alpha = 0.85f)
-                                )
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Button(
-                                        onClick = {
-                                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(confirmed.infoUrl))
-                                            runCatching { context.startActivity(intent) }
+                    }
+                    if (completedCourses.isNotEmpty()) {
+                        HomeExpandableFolder(
+                            title = "Завершённое лечение",
+                            subtitle = "${completedCourses.size} ${if (completedCourses.size == 1) "курс" else "курса"}",
+                            icon = Icons.Filled.TaskAlt,
+                            accent = scheme.tertiary,
+                            onAccent = scheme.onTertiaryContainer,
+                            surfaceColor = scheme.tertiaryContainer
+                        ) {
+                            completedCourses.forEach { course ->
+                                val expanded = completedCourseExpanded[course.folderKey] ?: false
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            completedCourseExpanded[course.folderKey] = !expanded
                                         },
-                                        modifier = Modifier.weight(1f),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = scheme.primary,
-                                            contentColor = scheme.onPrimary
-                                        )
-                                    ) {
-                                        Text("Перейти")
-                                    }
-                                    Button(
-                                        onClick = {
-                                            medicineToEdit = confirmed
-                                            editableMedicineName = confirmed.name
-                                        },
-                                        modifier = Modifier.weight(1f),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = scheme.surface,
-                                            contentColor = scheme.primary
-                                        )
-                                    ) {
-                                        Text("Изменить")
-                                    }
-                                }
-                                OutlinedButton(
-                                    onClick = { onDeleteScannedMedicine(confirmed) },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = scheme.error)
+                                    colors = CardDefaults.cardColors(containerColor = scheme.surface.copy(alpha = 0.55f))
                                 ) {
-                                    Text("Удалить")
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    course.title,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = scheme.onSurface
+                                                )
+                                                Text(
+                                                    "${course.plans.size} записей",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = scheme.onSurfaceVariant
+                                                )
+                                            }
+                                            Icon(
+                                                imageVector = if (expanded) {
+                                                    Icons.Filled.KeyboardArrowUp
+                                                } else {
+                                                    Icons.Filled.KeyboardArrowDown
+                                                },
+                                                contentDescription = null,
+                                                tint = scheme.tertiary
+                                            )
+                                        }
+                                        AnimatedVisibility(visible = expanded) {
+                                            Column(
+                                                modifier = Modifier.padding(top = 8.dp),
+                                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                course.plans
+                                                    .groupBy { it.startDate }
+                                                    .toList()
+                                                    .sortedBy { (day, _) -> parseDateTimeMillis(day, "00:00") }
+                                                    .forEach { (day, dayPlans) ->
+                                                        Text(
+                                                            "День $day",
+                                                            fontWeight = FontWeight.Medium,
+                                                            color = scheme.primary
+                                                        )
+                                                        dayPlans.forEach { plan ->
+                                                            Text(
+                                                                "• ${plan.medicineName} — ${plan.dosage}, ${plan.reminderTime}",
+                                                                color = scheme.onSurface,
+                                                                style = MaterialTheme.typography.bodySmall
+                                                            )
+                                                            if (plan.notes.isNotBlank()) {
+                                                                Text(
+                                                                    "  ${plan.notes}",
+                                                                    color = scheme.onSurfaceVariant,
+                                                                    style = MaterialTheme.typography.labelSmall
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                            }
+                                        }
+                                    }
                                 }
-                            }
-                            if (index < displayedScannedMedicines.lastIndex) {
-                                HorizontalDivider(color = scheme.outlineVariant)
                             }
                         }
                     }
@@ -4250,16 +4491,16 @@ private fun HomeScreen(
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 18.dp)
+                    .padding(bottom = 8.dp)
                     .assistantTourTarget(
                         active = assistantTourActive && assistantSpotlight == AssistantTourSpotlight.HomeScanner,
                         pulseScale = spotlightScale(AssistantTourSpotlight.HomeScanner),
                         shape = CircleShape,
-                        borderColor = scheme.primary,
+                        borderColor = Color.Transparent,
                         onBounds = { onAssistantSpotlightBounds(it) }
                     )
             ) {
-                AnimatedScannerCameraButton(
+                MedScanIconButton(
                     onClick = {
                         if (!isBarcodeScanInProgress) {
                             isBarcodeScanInProgress = true
@@ -4270,8 +4511,8 @@ private fun HomeScreen(
                             }
                         }
                     },
-                    isBusy = isBarcodeScanInProgress,
-                    modifier = Modifier
+                    enabled = true,
+                    isBusy = isBarcodeScanInProgress
                 )
             }
         }
@@ -4354,6 +4595,19 @@ private fun HomeScreen(
             }
         )
     }
+    TreatmentReportOptionsDialog(
+        visible = showReportOptionsDialog,
+        tokenProvider = tokenProvider,
+        assignmentId = patientAssignmentId,
+        username = username,
+        displayName = profile?.fullName,
+        birthDate = profile?.birthDate,
+        plans = plans,
+        wellbeing = wellbeingEntries,
+        onDismiss = { showReportOptionsDialog = false },
+        onSavePdf = { createPdfLauncher.launch("treatment_report_$username.pdf") },
+        onDone = { msg -> showHomeSnackbar(msg, HomeSnackbarKind.Info) }
+    )
     if (showNoTreatmentDialog) {
         AlertDialog(
             onDismissRequest = { showNoTreatmentDialog = false },
@@ -4508,7 +4762,6 @@ private fun PersonalProfileScreen(
     onAssistantSpotlightBounds: (Rect?) -> Unit,
     onBack: () -> Unit
 ) {
-    val app = LocalMedAppColors.current
     val scheme = MaterialTheme.colorScheme
     val uiMetrics = rememberUiMetrics()
 
@@ -4528,113 +4781,179 @@ private fun PersonalProfileScreen(
     fun pScale(t: AssistantTourSpotlight) =
         if (assistantTourActive && assistantSpotlight == t) profileTourScale else 1f
 
-    Column(
+    val fullName = profile?.fullName.orEmpty().ifBlank { "Не указано" }
+    val birthDate = profile?.birthDate.orEmpty().ifBlank { "Не указана" }
+    val gender = profile?.gender.orEmpty().ifBlank { "Не указан" }
+    val relativeContact = profile?.relativeContact.orEmpty().ifBlank { "Не указан" }
+
+    MedSubScreenLayout(
+        title = "Личный профиль",
+        subtitle = "Данные и быстрые действия",
+        onBack = onBack,
         modifier = modifier
-            .fillMaxSize()
-            .background(app.heroGradient)
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("Личный профиль", style = MaterialTheme.typography.headlineSmall, color = app.onHero)
-        Card(
+        MedSurfaceCard(
             modifier = Modifier.assistantTourTarget(
                 active = assistantTourActive && assistantSpotlight == AssistantTourSpotlight.ProfileInfoCard,
                 pulseScale = pScale(AssistantTourSpotlight.ProfileInfoCard),
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(18.dp),
                 borderColor = scheme.primary,
                 onBounds = { onAssistantSpotlightBounds(it) }
-            ),
-            colors = CardDefaults.cardColors(containerColor = app.cardOnHero)
+            )
         ) {
-            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                profile?.takeIf { it.photoUri.isNotBlank() }?.let { prof ->
-                    AsyncImage(
-                        model = profilePhotoImageModel(prof.photoUri),
-                        contentDescription = "Фото профиля",
-                        modifier = Modifier.size(uiMetrics.profilePhotoSize).clip(CircleShape),
-                        contentScale = ContentScale.Crop
-                    )
+            MedProfileHeader(
+                login = username,
+                fullName = fullName,
+                scheme = scheme,
+                photoContent = profile?.takeIf { it.photoUri.isNotBlank() }?.let { prof ->
+                    {
+                        AsyncImage(
+                            model = profilePhotoImageModel(prof.photoUri),
+                            contentDescription = "Фото профиля",
+                            modifier = Modifier
+                                .size(uiMetrics.profilePhotoSize)
+                                .clip(CircleShape),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
                 }
-                Text("Логин: $username", fontWeight = FontWeight.Bold, color = scheme.onSurface)
-                Text("ФИО: ${profile?.fullName.orEmpty().ifBlank { "Не указано" }}", color = scheme.onSurface)
-                Text("Дата рождения: ${profile?.birthDate.orEmpty().ifBlank { "Не указана" }}", color = scheme.onSurface)
-                Text("Пол: ${profile?.gender.orEmpty().ifBlank { "Не указан" }}", color = scheme.onSurface)
-                Text("Контакт родственника: ${profile?.relativeContact.orEmpty().ifBlank { "Не указан" }}", color = scheme.onSurface)
-            }
+            )
+            HorizontalDivider(color = scheme.outline.copy(alpha = 0.35f))
+            MedProfileField("ФИО", fullName, Icons.Filled.Person, scheme)
+            MedProfileField("Дата рождения", birthDate, Icons.Filled.CalendarToday, scheme)
+            MedProfileField("Пол", gender, Icons.Filled.Wc, scheme)
+            MedProfileField(
+                "Контакт родственника",
+                relativeContact,
+                Icons.Filled.ContactPhone,
+                scheme,
+                showDivider = false
+            )
         }
-        Button(
-            onClick = { showMedicalPassport = true },
-            modifier = Modifier
-                .fillMaxWidth()
-                .assistantTourTarget(
+
+        MedSectionLabel("Разделы")
+        MedMenuCard {
+            MedMenuRow(
+                title = "Медицинский паспорт",
+                subtitle = "Группа крови, аллергии, препараты",
+                icon = Icons.Filled.MedicalInformation,
+                onClick = { showMedicalPassport = true },
+                modifier = Modifier.assistantTourTarget(
                     active = assistantTourActive && assistantSpotlight == AssistantTourSpotlight.ProfileMedicalPassport,
                     pulseScale = pScale(AssistantTourSpotlight.ProfileMedicalPassport),
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(14.dp),
                     borderColor = scheme.primary,
                     onBounds = { onAssistantSpotlightBounds(it) }
                 )
-        ) {
-            Text("Медицинский паспорт")
+            )
+            MedMenuRow(
+                title = "Настройки",
+                subtitle = "Тема, звук, аккаунт",
+                icon = Icons.Filled.Settings,
+                onClick = onOpenSettings,
+                showDividerBelow = true
+            )
+            MedMenuRow(
+                title = "Редактировать профиль",
+                subtitle = "Анкета и медицинские данные",
+                icon = Icons.Filled.Edit,
+                onClick = onEditProfile,
+                showDividerBelow = false
+            )
         }
-        Button(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth()) {
-            Text("Настройки")
-        }
-        Button(
+
+        MedSectionLabel("Экстренно")
+        MedSosHighlightCard(
             onClick = { showSos = true },
-            modifier = Modifier
-                .fillMaxWidth()
-                .assistantTourTarget(
-                    active = assistantTourActive && assistantSpotlight == AssistantTourSpotlight.ProfileSos,
-                    pulseScale = pScale(AssistantTourSpotlight.ProfileSos),
-                    shape = RoundedCornerShape(16.dp),
-                    borderColor = scheme.primary,
-                    onBounds = { onAssistantSpotlightBounds(it) }
-                ),
-            colors = ButtonDefaults.buttonColors(containerColor = scheme.error, contentColor = scheme.onError)
-        ) {
-            Text("SOS")
-        }
-        Button(onClick = onEditProfile, modifier = Modifier.fillMaxWidth()) {
-            Text("Редактировать профиль")
-        }
-        Button(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-            Text("Назад")
-        }
+            modifier = Modifier.assistantTourTarget(
+                active = assistantTourActive && assistantSpotlight == AssistantTourSpotlight.ProfileSos,
+                pulseScale = pScale(AssistantTourSpotlight.ProfileSos),
+                shape = RoundedCornerShape(20.dp),
+                borderColor = scheme.error,
+                onBounds = { onAssistantSpotlightBounds(it) }
+            )
+        )
     }
 
+    fun displayOrMissing(value: String?, missing: String) =
+        value.orEmpty().ifBlank { missing }
+
     if (showMedicalPassport) {
-        AlertDialog(
-            onDismissRequest = { showMedicalPassport = false },
-            title = { Text("Медицинский паспорт") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Группа крови: ${profile?.bloodType.orEmpty().ifBlank { "Не указана" }}")
-                    Text("Хронические заболевания: ${profile?.chronicDiseases.orEmpty().ifBlank { "Не указаны" }}")
-                    Text("Аллергии: ${profile?.allergies.orEmpty().ifBlank { "Не указаны" }}")
-                    Text("Регулярные препараты: ${profile?.regularMedications.orEmpty().ifBlank { "Не указаны" }}")
-                    Text("Вес: ${profile?.weight.orEmpty().ifBlank { "Не указан" }}")
-                    Text("Рост: ${profile?.height.orEmpty().ifBlank { "Не указан" }}")
-                }
-            },
-            confirmButton = { Button(onClick = { showMedicalPassport = false }) { Text("Закрыть") } }
+        MedClinicalInfoDialog(
+            title = "Медицинский паспорт",
+            subtitle = "Сводка для врача и экстренных случаев",
+            headerIcon = Icons.Filled.MedicalInformation,
+            accentColor = scheme.primary,
+            accentContainer = scheme.primaryContainer,
+            rows = listOf(
+                MedClinicalInfoRow(
+                    "Группа крови",
+                    displayOrMissing(profile?.bloodType, "Не указана"),
+                    Icons.Filled.Bloodtype
+                ),
+                MedClinicalInfoRow(
+                    "Хронические заболевания",
+                    displayOrMissing(profile?.chronicDiseases, "Не указаны"),
+                    Icons.Filled.LocalHospital
+                ),
+                MedClinicalInfoRow(
+                    "Аллергии",
+                    displayOrMissing(profile?.allergies, "Не указаны"),
+                    Icons.Filled.Warning,
+                    highlight = !profile?.allergies.isNullOrBlank()
+                ),
+                MedClinicalInfoRow(
+                    "Регулярные препараты",
+                    displayOrMissing(profile?.regularMedications, "Не указаны"),
+                    Icons.Filled.Medication
+                ),
+                MedClinicalInfoRow(
+                    "Вес",
+                    displayOrMissing(profile?.weight, "Не указан"),
+                    Icons.Filled.MonitorWeight
+                ),
+                MedClinicalInfoRow(
+                    "Рост",
+                    displayOrMissing(profile?.height, "Не указан"),
+                    Icons.Filled.Height
+                )
+            ),
+            onDismiss = { showMedicalPassport = false }
         )
     }
 
     if (showSos) {
-        AlertDialog(
-            onDismissRequest = { showSos = false },
-            title = { Text("SOS карточка") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Диагнозы: ${profile?.badHabits.orEmpty().ifBlank { "Не указаны" }}")
-                    Text("Аллергии: ${profile?.allergies.orEmpty().ifBlank { "Не указаны" }}")
-                    Text("Лекарства за последние 24 часа:")
-                    Text(lastDayMeds.ifBlank { "Нет данных" })
-                    Text("Контакт родственника: ${profile?.relativeContact.orEmpty().ifBlank { "Не указан" }}")
-                }
-            },
-            confirmButton = { Button(onClick = { showSos = false }) { Text("Понятно") } }
+        MedClinicalInfoDialog(
+            title = "SOS-карточка",
+            subtitle = "Покажите медперсоналу при экстренной ситуации",
+            headerIcon = Icons.Filled.Emergency,
+            accentColor = scheme.error,
+            accentContainer = scheme.errorContainer,
+            rows = listOf(
+                MedClinicalInfoRow(
+                    "Диагнозы",
+                    displayOrMissing(profile?.badHabits, "Не указаны"),
+                    Icons.Filled.LocalHospital
+                ),
+                MedClinicalInfoRow(
+                    "Аллергии",
+                    displayOrMissing(profile?.allergies, "Не указаны"),
+                    Icons.Filled.Warning,
+                    highlight = !profile?.allergies.isNullOrBlank()
+                ),
+                MedClinicalInfoRow(
+                    "Лекарства за 24 часа",
+                    lastDayMeds.ifBlank { "Нет данных" },
+                    Icons.Filled.Medication
+                ),
+                MedClinicalInfoRow(
+                    "Контакт родственника",
+                    displayOrMissing(profile?.relativeContact, "Не указан"),
+                    Icons.Filled.ContactPhone,
+                    highlight = true
+                )
+            ),
+            onDismiss = { showSos = false }
         )
     }
 }
@@ -4644,6 +4963,8 @@ private fun PersonalProfileScreen(
 private fun SettingsScreen(
     modifier: Modifier = Modifier,
     profile: UserProfile?,
+    recentMedications24h: String,
+    isAdmin: Boolean,
     isDarkTheme: Boolean,
     onDarkThemeChange: (Boolean) -> Unit,
     assistantTourActive: Boolean,
@@ -4656,10 +4977,10 @@ private fun SettingsScreen(
     onDeleteAccount: () -> Unit,
     onOpenSupportChat: () -> Unit,
     onOpenSupportAdmin: () -> Unit,
+    onOpenAdminPanel: () -> Unit,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
-    val app = LocalMedAppColors.current
     val scheme = MaterialTheme.colorScheme
     var notificationMode by remember { mutableStateOf(TextFieldValue(profile?.notificationMode ?: "Системный звук")) }
     var modeExpanded by remember { mutableStateOf(false) }
@@ -4718,55 +5039,65 @@ private fun SettingsScreen(
 
     var adminTapCount by remember { mutableIntStateOf(0) }
     var showAdminKeyDialog by remember { mutableStateOf(false) }
+    var showSosCard by remember { mutableStateOf(false) }
     var adminKeyDraft by remember { mutableStateOf("") }
 
     LaunchedEffect(showAdminKeyDialog) {
         if (showAdminKeyDialog) adminKeyDraft = ""
     }
 
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(app.heroGradient)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp)
-                .padding(bottom = 68.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+    fun displayOrMissing(value: String?, missing: String) =
+        value.orEmpty().ifBlank { missing }
+
+    Box(modifier = modifier.fillMaxSize()) {
+        MedSubScreenLayout(
+            title = "Настройки",
+            subtitle = "Интерфейс, уведомления и аккаунт",
+            onBack = onBack,
+            scrollBottomPadding = 88.dp,
+            titleModifier = Modifier.clickable {
+                adminTapCount += 1
+                if (adminTapCount >= 7) {
+                    adminTapCount = 0
+                    adminKeyDraft = ""
+                    showAdminKeyDialog = true
+                }
+            }
         ) {
-            Text(
-                "Настройки",
-                style = MaterialTheme.typography.headlineSmall,
-                color = app.onHero,
-                modifier = Modifier.clickable {
-                    adminTapCount += 1
-                    if (adminTapCount >= 7) {
-                        adminTapCount = 0
-                        adminKeyDraft = ""
-                        showAdminKeyDialog = true
+            MedSectionLabel("Интерфейс")
+            MedSurfaceCard {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = scheme.primary.copy(alpha = 0.16f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Palette,
+                            contentDescription = null,
+                            tint = scheme.primary,
+                            modifier = Modifier
+                                .padding(10.dp)
+                                .size(22.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            "Тема оформления",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = scheme.onSurface
+                        )
+                        Text(
+                            "Светлая или тёмная палитра",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onSurfaceVariant
+                        )
                     }
                 }
-            )
-        Card(
-            colors = CardDefaults.cardColors(containerColor = app.cardOnHero)
-        ) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Text(
-                    "Тема оформления",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = scheme.onSurface
-                )
-                Text(
-                    "Светлая или тёмная палитра интерфейса.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = scheme.onSurfaceVariant
-                )
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                     SegmentedButton(
                         selected = isDarkTheme,
@@ -4786,8 +5117,8 @@ private fun SettingsScreen(
                         onClick = { onDarkThemeChange(false) },
                         shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
                         colors = SegmentedButtonDefaults.colors(
-                            activeContainerColor = scheme.secondary,
-                            activeContentColor = scheme.onSecondary,
+                            activeContainerColor = scheme.primary,
+                            activeContentColor = scheme.onPrimary,
                             inactiveContainerColor = scheme.surfaceVariant,
                             inactiveContentColor = scheme.onSurfaceVariant
                         )
@@ -4796,21 +5127,42 @@ private fun SettingsScreen(
                     }
                 }
             }
-        }
-        Card(
-            modifier = Modifier.assistantTourTarget(
-                active = assistantTourActive && assistantSpotlight == AssistantTourSpotlight.SettingsSoundCard,
-                pulseScale = sScale(AssistantTourSpotlight.SettingsSoundCard),
-                shape = RoundedCornerShape(16.dp),
-                borderColor = scheme.primary,
-                onBounds = { onAssistantSpotlightBounds(it) }
-            ),
-            colors = CardDefaults.cardColors(containerColor = app.cardOnHero)
-        ) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+
+            MedSectionLabel("Уведомления")
+            MedSurfaceCard(
+                modifier = Modifier.assistantTourTarget(
+                    active = assistantTourActive && assistantSpotlight == AssistantTourSpotlight.SettingsSoundCard,
+                    pulseScale = sScale(AssistantTourSpotlight.SettingsSoundCard),
+                    shape = RoundedCornerShape(18.dp),
+                    borderColor = scheme.primary,
+                    onBounds = { onAssistantSpotlightBounds(it) }
+                )
             ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(bottom = 10.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = scheme.primary.copy(alpha = 0.16f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Notifications,
+                            contentDescription = null,
+                            tint = scheme.primary,
+                            modifier = Modifier
+                                .padding(10.dp)
+                                .size(22.dp)
+                        )
+                    }
+                    Text(
+                        "Звук напоминаний",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = scheme.onSurface
+                    )
+                }
                 ExposedDropdownMenuBox(
                     expanded = modeExpanded,
                     onExpandedChange = { modeExpanded = !modeExpanded }
@@ -4819,7 +5171,7 @@ private fun SettingsScreen(
                         value = notificationMode,
                         onValueChange = { },
                         readOnly = true,
-                        label = { Text("Звук уведомлений") },
+                        label = { Text("Режим звука") },
                         trailingIcon = {
                             ExposedDropdownMenuDefaults.TrailingIcon(
                                 expanded = modeExpanded,
@@ -4860,11 +5212,12 @@ private fun SettingsScreen(
                     }
                 }
                 if (notificationMode.text == "Загрузить свой") {
+                    Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = TextFieldValue(customSoundName),
                         onValueChange = { },
                         readOnly = true,
-                        label = { Text("Выбранный звук") },
+                        label = { Text("Выбранный файл") },
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedTextColor = scheme.onSurface,
                             unfocusedTextColor = scheme.onSurface,
@@ -4875,7 +5228,8 @@ private fun SettingsScreen(
                         ),
                         modifier = Modifier.fillMaxWidth()
                     )
-                    Button(
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
                         onClick = {
                             val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                                 Manifest.permission.READ_MEDIA_AUDIO
@@ -4891,12 +5245,13 @@ private fun SettingsScreen(
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Выбрать звук уведомлений")
+                        Text("Выбрать звук")
                     }
                 }
-                Button(
+                Spacer(modifier = Modifier.height(12.dp))
+                FilledTonalButton(
                     onClick = {
-                        val current = profile ?: return@Button
+                        val current = profile ?: return@FilledTonalButton
                         onSaveSettings(
                             current.copy(
                                 notificationMode = notificationMode.text.ifBlank { "Системный звук" },
@@ -4913,21 +5268,43 @@ private fun SettingsScreen(
                     Text("Сохранить настройки")
                 }
             }
-        }
 
-        Button(onClick = onLogout, modifier = Modifier.fillMaxWidth()) {
-            Text("Выйти из аккаунта")
-        }
-        Button(
-            onClick = { showDeleteConfirm = true },
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = scheme.error, contentColor = scheme.onError)
-        ) {
-            Text("Удалить аккаунт")
-        }
-        Button(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-            Text("Назад")
-        }
+            if (isAdmin) {
+                MedSectionLabel("Администрирование")
+                MedMenuCard {
+                    MedMenuRow(
+                        title = "Админ-панель",
+                        subtitle = "Создание аккаунтов врачей",
+                        icon = Icons.Filled.AdminPanelSettings,
+                        onClick = onOpenAdminPanel,
+                        showDividerBelow = false
+                    )
+                }
+            }
+
+            MedSectionLabel("Экстренно")
+            MedSosHighlightCard(onClick = { showSosCard = true })
+
+            MedSectionLabel("Аккаунт")
+            MedMenuCard {
+                MedMenuRow(
+                    title = "Выйти из аккаунта",
+                    subtitle = "Сессия на этом устройстве",
+                    icon = Icons.Filled.Logout,
+                    onClick = onLogout,
+                    showDividerBelow = true
+                )
+                MedMenuRow(
+                    title = "Удалить аккаунт",
+                    subtitle = "Профиль, лечение и дневник",
+                    icon = Icons.Filled.Delete,
+                    onClick = { showDeleteConfirm = true },
+                    iconTint = scheme.error,
+                    iconContainerColor = scheme.errorContainer.copy(alpha = 0.55f),
+                    titleColor = scheme.error,
+                    showDividerBelow = false
+                )
+            }
         }
 
         Surface(
@@ -4999,6 +5376,41 @@ private fun SettingsScreen(
             dismissButton = {
                 Button(onClick = { showAdminKeyDialog = false }) { Text("Отмена") }
             }
+        )
+    }
+
+    if (showSosCard) {
+        MedClinicalInfoDialog(
+            title = "SOS-карточка",
+            subtitle = "Покажите медперсоналу при экстренной ситуации",
+            headerIcon = Icons.Filled.Emergency,
+            accentColor = scheme.error,
+            accentContainer = scheme.errorContainer,
+            rows = listOf(
+                MedClinicalInfoRow(
+                    "Диагнозы",
+                    displayOrMissing(profile?.badHabits, "Не указаны"),
+                    Icons.Filled.LocalHospital
+                ),
+                MedClinicalInfoRow(
+                    "Аллергии",
+                    displayOrMissing(profile?.allergies, "Не указаны"),
+                    Icons.Filled.Warning,
+                    highlight = !profile?.allergies.isNullOrBlank()
+                ),
+                MedClinicalInfoRow(
+                    "Лекарства за 24 часа",
+                    recentMedications24h.ifBlank { "Нет данных" },
+                    Icons.Filled.Medication
+                ),
+                MedClinicalInfoRow(
+                    "Контакт родственника",
+                    displayOrMissing(profile?.relativeContact, "Не указан"),
+                    Icons.Filled.ContactPhone,
+                    highlight = true
+                )
+            ),
+            onDismiss = { showSosCard = false }
         )
     }
 }
@@ -5310,6 +5722,59 @@ private fun plansForActiveCourseOnly(plans: List<TreatmentPlan>): List<Treatment
     return if (withCourse.isEmpty()) plans else plans.filter { it.courseId == withCourse.maxOf { it.courseId } }
 }
 
+private fun homeCompletedCourses(plans: List<TreatmentPlan>): List<HomeCompletedCourse> {
+    val nowMillis = System.currentTimeMillis()
+    val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(nowMillis))
+    val latestCourseId = activeCourseId(plans)
+    val useCourseFilter = plans.any { it.courseId > 0L }
+    val dayHasUpcoming = plans.groupBy { it.startDate }.mapValues { (_, dayPlans) ->
+        dayPlans.any { planReminderUpcoming(it, nowMillis) }
+    }
+    val isCompletedPlan: (TreatmentPlan) -> Boolean = { plan ->
+        plan.startDate < today || (plan.startDate == today && dayHasUpcoming[plan.startDate] != true)
+    }
+
+    val result = mutableListOf<HomeCompletedCourse>()
+    if (useCourseFilter && latestCourseId > 0L) {
+        plans.filter { it.courseId in 1 until latestCourseId }
+            .groupBy { it.courseId }
+            .entries
+            .sortedByDescending { it.key }
+            .forEach { (courseId, coursePlans) ->
+                result.add(
+                    HomeCompletedCourse(
+                        folderKey = courseId,
+                        title = extractCoursePeriodTitle(coursePlans),
+                        plans = coursePlans
+                    )
+                )
+            }
+        val currentCompleted = plans.filter { it.courseId == latestCourseId && isCompletedPlan(it) }
+        if (currentCompleted.isNotEmpty()) {
+            result.add(
+                0,
+                HomeCompletedCourse(
+                    folderKey = latestCourseId + 1_000_000L,
+                    title = "Текущий курс — завершённые дни",
+                    plans = currentCompleted
+                )
+            )
+        }
+    } else {
+        val legacyCompleted = plans.filter(isCompletedPlan)
+        if (legacyCompleted.isNotEmpty()) {
+            result.add(
+                HomeCompletedCourse(
+                    folderKey = 0L,
+                    title = extractCoursePeriodTitle(legacyCompleted),
+                    plans = legacyCompleted
+                )
+            )
+        }
+    }
+    return result
+}
+
 private fun extractCoursePeriodTitle(coursePlans: List<TreatmentPlan>): String {
     if (coursePlans.isEmpty()) return "Курс лечения"
     val sample = coursePlans.first().notes
@@ -5547,7 +6012,12 @@ private fun TreatmentPlanDayStrip(
 private fun TreatmentScreen(
     modifier: Modifier = Modifier,
     username: String,
+    profile: UserProfile?,
     plans: List<TreatmentPlan>,
+    wellbeingEntries: Map<String, WellbeingEntry>,
+    tokenProvider: () -> String,
+    onAssignmentChanged: (DoctorAssignment?) -> Unit,
+    onOpenDoctorChat: (assignmentId: Long, doctorName: String) -> Unit,
     assistantTourActive: Boolean,
     assistantSpotlight: AssistantTourSpotlight,
     onAssistantSpotlightBounds: (Rect?) -> Unit,
@@ -5579,8 +6049,6 @@ private fun TreatmentScreen(
         isPlaying = showSavedAnim,
         iterations = 1
     )
-    var isRefreshing by remember { mutableStateOf(false) }
-    var refreshVersion by remember { mutableIntStateOf(0) }
     val contentScrollState = rememberScrollState()
     var clockNow by remember { mutableStateOf(System.currentTimeMillis()) }
     val readableFieldColors = readableOutlinedFieldColors()
@@ -5643,40 +6111,34 @@ private fun TreatmentScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Button(
-            onClick = {
-                if (!isRefreshing) {
-                    // Force immediate reclassification between tabs on manual refresh.
-                    clockNow = System.currentTimeMillis()
-                    isRefreshing = true
-                    refreshVersion += 1
-                }
-            },
-            enabled = !isRefreshing,
-            modifier = Modifier
-                .fillMaxWidth()
-                .assistantTourTarget(
-                    active = assistantTourActive && assistantSpotlight == AssistantTourSpotlight.TreatmentRefresh,
-                    pulseScale = trScale(AssistantTourSpotlight.TreatmentRefresh),
-                    shape = RoundedCornerShape(16.dp),
-                    borderColor = scheme.primary,
-                    onBounds = { onAssistantSpotlightBounds(it) }
-                )
+        AnimatedVisibility(
+            visible = true,
+            enter = fadeIn(tween(380)) + slideInVertically(tween(380), initialOffsetY = { it / 8 })
         ) {
-            Text(if (isRefreshing) "Обновление..." else "Обновить план лечения")
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    "Планировщик лечения",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = app.onHero
+                )
+                Text(
+                    "Сначала выберите период, затем заполните лечение по дням.",
+                    color = app.onHeroMuted
+                )
+            }
         }
-        Text(
-            "Планировщик лечения",
-            style = MaterialTheme.typography.headlineSmall,
-            color = app.onHero
-        )
-        Text(
-            "Сначала выберите период, затем заполните лечение по дням.",
-            color = app.onHeroMuted
+        DoctorTreatmentSection(
+            tokenProvider = tokenProvider,
+            userProfile = profile,
+            treatmentPlans = plans,
+            wellbeingEntries = wellbeingEntries,
+            onOpenChat = onOpenDoctorChat,
+            onAssignmentChanged = onAssignmentChanged
         )
         Card(
             modifier = Modifier
                 .fillMaxWidth()
+                .animateContentSize(tween(320, easing = FastOutSlowInEasing))
                 .assistantTourTarget(
                     active = assistantTourActive && assistantSpotlight == AssistantTourSpotlight.TreatmentPeriodCard,
                     pulseScale = trScale(AssistantTourSpotlight.TreatmentPeriodCard),
@@ -5884,13 +6346,6 @@ private fun TreatmentScreen(
                 showSavedAnim = false
             }
         }
-        LaunchedEffect(isRefreshing, refreshVersion) {
-            if (isRefreshing) {
-                delay(600)
-                isRefreshing = false
-            }
-        }
-
         Text(
             "Сохраненное расписание лечения",
             style = MaterialTheme.typography.titleMedium,
@@ -5928,12 +6383,12 @@ private fun TreatmentScreen(
         }
 
         val nowMillis = clockNow
-        val today = remember(refreshVersion, plans.size, selectedTreatmentTab, clockNow) {
+        val today = remember(plans.size, selectedTreatmentTab, clockNow) {
             java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(java.util.Date(nowMillis))
         }
         val latestCourseId = activeCourseId(plans)
         val useCourseFilter = plans.any { it.courseId > 0L }
-        val dayHasUpcoming = remember(refreshVersion, plans.size, clockNow) {
+        val dayHasUpcoming = remember(plans.size, clockNow) {
             plans.groupBy { it.startDate }.mapValues { (_, dayPlans) ->
                 dayPlans.any { plan ->
                     val reminderMillis = parseDateTimeMillis(plan.startDate, plan.reminderTime)
@@ -5946,7 +6401,6 @@ private fun TreatmentScreen(
             selectedTreatmentTab,
             today,
             nowMillis,
-            refreshVersion,
             dayHasUpcoming,
             latestCourseId,
             useCourseFilter
@@ -6576,6 +7030,10 @@ private enum class Screen {
     Settings,
     SupportChat,
     SupportAdmin,
+    AdminPanel,
+    DoctorPanel,
+    DoctorProfileForm,
+    DoctorPatientChat,
     Treatment,
     WellbeingDiary
 }

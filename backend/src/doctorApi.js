@@ -125,6 +125,27 @@ export function registerDoctorRoutes(app, {
     });
   });
 
+  app.delete('/api/admin/doctors/:id', requireAdminJwtOrKey, (req, res) => {
+    const userId = Number(req.params.id);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(400).json({ ok: false, error: 'bad_id' });
+    }
+    const doctor = db
+      .prepare(`SELECT id, username FROM users WHERE id = ? AND role = 'doctor' LIMIT 1`)
+      .get(userId);
+    if (!doctor) return res.status(404).json({ ok: false, error: 'not_found' });
+
+    db.prepare('DELETE FROM doctor_messages WHERE assignment_id IN (SELECT id FROM doctor_assignments WHERE doctor_user_id = ?)').run(userId);
+    db.prepare('DELETE FROM doctor_prescriptions WHERE assignment_id IN (SELECT id FROM doctor_assignments WHERE doctor_user_id = ?)').run(userId);
+    db.prepare('DELETE FROM treatment_reports WHERE assignment_id IN (SELECT id FROM doctor_assignments WHERE doctor_user_id = ?)').run(userId);
+    db.prepare('DELETE FROM doctor_assignments WHERE doctor_user_id = ?').run(userId);
+    db.prepare('DELETE FROM doctor_shifts WHERE doctor_user_id = ?').run(userId);
+    db.prepare('DELETE FROM doctor_profiles WHERE user_id = ?').run(userId);
+    db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+
+    res.json({ ok: true, deletedUsername: doctor.username });
+  });
+
   app.get('/api/admin/doctors', requireAdminJwtOrKey, (req, res) => {
     const rows = db
       .prepare(

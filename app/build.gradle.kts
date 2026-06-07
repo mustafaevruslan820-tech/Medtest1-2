@@ -21,13 +21,12 @@ android {
 
     buildTypes {
         debug {
-            // Локальный backend на ПК (тот же Wi‑Fi). Эмулятор: "10.0.2.2:8081"
+            // Эмулятор: "10.0.2.2:8081"
             buildConfigField("String", "BACKEND_BASE_URL", "\"192.168.0.109:8081\"")
         }
         release {
-            // Публичный backend на Render (см. render.yaml). После деплоя замените URL, если имя сервиса другое.
+            // Публичный backend на Render
             buildConfigField("String", "BACKEND_BASE_URL", "\"https://medtest1-backend.onrender.com\"")
-            // Подпись debug-ключом: APK можно установить на телефон (не для Google Play).
             signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = false
             proguardFiles(
